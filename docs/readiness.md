@@ -7,8 +7,9 @@ approval, or live project storage access.
 
 `tests/test_production_readiness.py` exercises the production journal,
 containment, executor, admission, pagination, transport, and health components
-together where practical. Activation remains blocked until the authoritative
-Overseer verifier and protected durable root registry are composed and
+together where practical. The authoritative Overseer clients, protected root
+registry, and side-effect-free production composition are implemented. Live
+activation remains blocked until the exact deployment package is reviewed and
 approved.
 
 ## Required gates
@@ -22,13 +23,13 @@ approved.
 | Stable pagination | Implemented with durable HMAC-bound snapshots tied to project, root, path, policy revision, and namespace identity | Cursor binds a stable snapshot or detects namespace changes without duplicates, omissions, or cross-context reuse |
 | Strict MCP validation | Implemented for unknown fields at the MCP boundary; enum and boundary cases remain release-test scope | Every tool schema rejects extra fields and unknown enum values before authorization, journaling, or filesystem access |
 | Non-MCP health | Implemented by the side-effect-free production application factory; listener activation remains prohibited | Loopback `GET /health` reports only readiness, contract version, and dependency state; no registrations, host paths, authority, or results |
-| Fail-closed activation | Component constructors require injected dependencies and missing root resolution fails closed; live composition remains blocked | Durable approved adapter registration, protected root registry, exact live Overseer verification, revocation/expiry recheck before commit, least-privilege runtime, and explicit activation approval |
+| Fail-closed activation | Production composition requires an approved durable root registry, exact loopback Overseer verifiers, journal, admission controller, paginator, and bounded executor; no listener or live configuration is created implicitly | Durable approved adapter registration, exact live verifier smoke, least-privilege runtime, and explicit activation approval |
 
 ## Activation rule
 
-Activation is prohibited until an authoritative Overseer verifier and protected
-durable root registry are implemented, composed, reviewed, and explicitly
-approved. A healthy process, available MCP tool inventory, fixture authorization, message
+Activation is prohibited until the composed deployment, adapter revision,
+root authorization, service plan, and verification evidence are reviewed and
+explicitly approved. A healthy process, available MCP tool inventory, fixture authorization, message
 acknowledgment, lease, or claim is not mutation authority. Only an exact,
 unexpired, unrevoked Overseer approval claimed by the approved adapter may
 reach execution, and only terminal verified evidence may satisfy a workflow.
