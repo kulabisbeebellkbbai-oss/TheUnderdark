@@ -1,0 +1,45 @@
+import importlib, json, os, socket
+from pathlib import Path
+import pytest
+
+def private(path:Path,data:bytes): path.write_bytes(data); path.chmod(0o600)
+def config(tmp_path:Path):
+    state=tmp_path/"state"; state.mkdir(); state.chmod(0o700); token=tmp_path/"token"; key=tmp_path/"key"; cfg=tmp_path/"config.json"
+    private(token,b"test-token\n"); private(key,b"k"*32)
+    value={"host":"127.0.0.1","port":8799,"state_dir":str(state),"journal_path":str(state/"journal.sqlite3"),"admission_path":str(state/"admission.sqlite3"),"pagination_path":str(state/"pages.sqlite3"),"registry_path":str(state/"roots.sqlite3"),"overseer_authorization_endpoint":"http://127.0.0.1:8766/storage/authorizations/verify","overseer_root_endpoint":"http://127.0.0.1:8766/storage/roots/verify","overseer_token_file":str(token),"cursor_key_file":str(key),"root_authorization_refs":{},"limits":{"max_storage_bytes":1024,"max_concurrent_operations":1,"max_requests_per_window":10,"rate_window_seconds":60}}
+    private(cfg,json.dumps(value).encode()); return cfg,value
+
+def test_import_has_no_socket_or_file_side_effect(tmp_path,monkeypatch):
+    opened=[]; monkeypatch.setattr(socket,"socket",lambda *a,**k: opened.append((a,k)))
+    module=importlib.import_module("theunderdark.production_cli"); importlib.reload(module)
+    assert opened==[] and list(tmp_path.iterdir())==[]
+
+def test_check_composes_without_binding(tmp_path,monkeypatch):
+    cfg,_=config(tmp_path); bound=[]; monkeypatch.setattr(socket.socket,"bind",lambda self,address:bound.append(address))
+    from theunderdark.production_cli import main
+    assert main(["check","--config",str(cfg)])==0 and bound==[]
+    assert all((Path(value).stat().st_mode&0o777)==0o600 for value in json.loads(cfg.read_text()).values() if isinstance(value,str) and value.endswith(".sqlite3"))
+
+def test_rejects_non_loopback_and_permissive_secret(tmp_path):
+    cfg,value=config(tmp_path); value["host"]="0.0.0.0"; private(cfg,json.dumps(value).encode())
+    from theunderdark.production_cli import build_runtime
+    with pytest.raises(ValueError): build_runtime(cfg)
+    value["host"]="127.0.0.1"; Path(value["overseer_token_file"]).chmod(0o644); private(cfg,json.dumps(value).encode())
+    with pytest.raises(PermissionError): build_runtime(cfg)
+
+def test_check_rejects_empty_token_before_live_call(tmp_path):
+    cfg,value=config(tmp_path); private(Path(value["overseer_token_file"]),b"\n")
+    from theunderdark.production_cli import build_runtime
+    with pytest.raises(ValueError,match="token file is empty"): build_runtime(cfg)
+
+def test_partial_construction_closes_prior_resources(tmp_path,monkeypatch):
+    cfg,_=config(tmp_path); closed=[]
+    import theunderdark.production_cli as launcher
+    real=launcher.SQLiteOperationJournal
+    class TrackedJournal(real):
+        def close(self): closed.append("journal"); super().close()
+    class BrokenAdmission:
+        def __init__(self,*a,**k): raise RuntimeError("later dependency failed")
+    monkeypatch.setattr(launcher,"SQLiteOperationJournal",TrackedJournal); monkeypatch.setattr(launcher,"SQLiteAdmissionController",BrokenAdmission)
+    with pytest.raises(RuntimeError,match="later dependency failed"): launcher.build_runtime(cfg)
+    assert closed==["journal"]

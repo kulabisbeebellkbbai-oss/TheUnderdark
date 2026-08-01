@@ -17,6 +17,7 @@ test = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 theunderdark-mcp = "theunderdark.server:main"
+theunderdark-production = "theunderdark.production_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/theunderdark", "src/underdark"]
