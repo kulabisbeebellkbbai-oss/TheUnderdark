@@ -1,0 +1,49 @@
+# Local agent and editor state
+.agents/
+.codex/
+AGENTS.md
+.idea/
+.vscode/
+.playwright-mcp/
+.roadex-client-test/
+
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+credentials*
+secrets*
+
+# Local state, databases, and exports
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+state/
+data/
+exports/
+
+# Dependencies and generated output
+node_modules/
+.venv/
+*.egg-info/
+dist/
+build/
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.log
+*.crt
+
+# Operating-system files
+.DS_Store
+Thumbs.db
