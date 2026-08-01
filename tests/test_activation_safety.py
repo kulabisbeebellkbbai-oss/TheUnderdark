@@ -6,6 +6,7 @@ import importlib
 import json
 import socket
 import sys
+from datetime import UTC,datetime,timedelta
 from pathlib import Path
 
 import pytest
@@ -187,3 +188,32 @@ def test_backup_bindings_are_required_exact_private_and_non_wildcard(tmp_path: P
 
     value["backup_bindings"][0]["project_id"]="roadex"; artifacts.chmod(0o755); rewrite(config,value)
     with pytest.raises(PermissionError,match="owner-only"): build_runtime(config)
+
+def test_operator_registers_only_exact_overseer_approved_root_and_binds_config(tmp_path: Path,monkeypatch:pytest.MonkeyPatch)->None:
+    import theunderdark.production_cli as launcher
+    config,value=launcher_config(tmp_path); root=tmp_path/"approved-root"; root.mkdir(); observed=[]
+    def approve(_self,_url,*,headers,json,timeout):
+        observed.append(dict(json)); now=datetime.now(UTC)
+        record={key:json[key] for key in ("action","project_id","root_id","policy_revision","root_identity","alias","status","max_bytes","target_digest")}
+        return {"ok":True,"contract_version":"1.0","authorization":{"approval_id":"approval-root-1",**record,"approved_at":now.isoformat(),"expires_at":(now+timedelta(minutes=5)).isoformat(),"redactions_applied":True}}
+    monkeypatch.setattr(launcher.UrllibJSONTransport,"post",approve)
+    digest=launcher.register_approved_root(config,project_id="roadex",root_id="work",policy_revision="7",host_path=root,alias="workspace",max_bytes=1024,authorization_ref="root-auth-1")
+    updated=json.loads(config.read_text()); assert updated["root_authorization_refs"]=={digest:"root-auth-1"}
+    assert observed[0]["authorization_ref"]=="root-auth-1" and observed[0]["project_id"]=="roadex" and "host_path" not in observed[0]
+    with launcher.build_runtime(config) as runtime: assert runtime.registry.resolve("roadex","work","7").root==root
+
+@pytest.mark.parametrize("field,value",[("project_id","*"),("root_id","with space"),("policy_revision","bad\nrevision")])
+def test_operator_rejects_non_exact_root_identity_without_config_mutation(tmp_path:Path,field:str,value:str)->None:
+    from theunderdark.production_cli import register_approved_root
+    config,_=launcher_config(tmp_path); root=tmp_path/"root"; root.mkdir(); before=config.read_bytes()
+    arguments={"project_id":"roadex","root_id":"work","policy_revision":"7","host_path":root,"alias":"workspace","max_bytes":1024,"authorization_ref":"root-auth-1"}; arguments[field]=value
+    with pytest.raises(Exception): register_approved_root(config,**arguments)
+    assert config.read_bytes()==before
+
+def test_operator_rolls_back_authorization_binding_when_overseer_denies(tmp_path:Path,monkeypatch:pytest.MonkeyPatch)->None:
+    import theunderdark.production_cli as launcher
+    config,_=launcher_config(tmp_path); root=tmp_path/"root"; root.mkdir(); before=config.read_bytes()
+    monkeypatch.setattr(launcher.UrllibJSONTransport,"post",lambda *_a,**_k:{"ok":False,"error":{"code":"AUTHORIZATION_MISMATCH"}})
+    with pytest.raises(Exception): launcher.register_approved_root(config,project_id="roadex",root_id="work",policy_revision="7",host_path=root,alias="workspace",max_bytes=1024,authorization_ref="root-auth-1")
+    assert config.read_bytes()==before
+    with launcher.build_runtime(config) as runtime: assert runtime.registry.project_roots("roadex")==()

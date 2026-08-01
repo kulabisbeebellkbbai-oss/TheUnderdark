@@ -41,7 +41,7 @@ class _Bind:
         if self.host!="127.0.0.1" or not 1<=self.port<=65535: raise ValueError("production bind must be explicit IPv4 loopback and a valid port")
 
 class ProductionRuntime:
-    def __init__(self,*resources,service:ProductionStorageService,bind:_Bind): self._resources=resources; self.service=service; self.bind=bind
+    def __init__(self,*resources,service:ProductionStorageService,bind:_Bind,registry:SQLiteRootRegistry,root_authorization_refs:dict[str,str]): self._resources=resources; self.service=service; self.bind=bind; self.registry=registry; self.root_authorization_refs=root_authorization_refs
     def close(self):
         for resource in reversed(self._resources):
             close=getattr(resource,"close",None)
@@ -98,12 +98,34 @@ def build_runtime(config_path:str|Path)->ProductionRuntime:
             try: resource.close()
             except Exception: pass
         raise
-    return ProductionRuntime(*resources,service=service,bind=bind)
+    return ProductionRuntime(*resources,service=service,bind=bind,registry=registry,root_authorization_refs=references)
+
+def register_approved_root(config_path:str|Path,*,project_id:str,root_id:str,policy_revision:str,host_path:str|Path,alias:str,max_bytes:int,authorization_ref:str)->str:
+    """Register one exact root and durably bind its approved Overseer reference."""
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",authorization_ref) is None: raise ValueError("authorization_ref must be an opaque ID")
+    config_file=_private_file(Path(config_path),"config",exact_mode=0o600); original=config_file.read_bytes()
+    with build_runtime(config_file) as runtime:
+        arguments={"project_id":project_id,"root_id":root_id,"policy_revision":policy_revision,"host_path":host_path,"alias":alias,"max_bytes":max_bytes}
+        digest=runtime.registry.registration_target_digest(**arguments)
+        config=json.loads(original); references=config["root_authorization_refs"]
+        if digest in references and references[digest]!=authorization_ref: raise ValueError("approval target is already bound to another authorization reference")
+        references[digest]=authorization_ref
+        _replace_private_json(config_file,config); runtime.root_authorization_refs[digest]=authorization_ref
+        try: runtime.registry.register(**arguments)
+        except Exception:
+            _replace_private_bytes(config_file,original); runtime.root_authorization_refs.pop(digest,None)
+            raise
+        return digest
 
 
 def main(argv:list[str]|None=None)->int:
-    parser=argparse.ArgumentParser(prog="theunderdark-production"); parser.add_argument("command",choices=("check","serve")); parser.add_argument("--config",required=True)
+    parser=argparse.ArgumentParser(prog="theunderdark-production"); parser.add_argument("command",choices=("check","serve","register-root")); parser.add_argument("--config",required=True)
+    parser.add_argument("--project-id"); parser.add_argument("--root-id"); parser.add_argument("--policy-revision"); parser.add_argument("--host-path"); parser.add_argument("--alias"); parser.add_argument("--max-bytes",type=int); parser.add_argument("--authorization-ref")
     args=parser.parse_args(argv)
+    if args.command=="register-root":
+        names=("project_id","root_id","policy_revision","host_path","alias","max_bytes","authorization_ref")
+        if any(getattr(args,name) is None for name in names): parser.error("register-root requires exact root identity, path, limit, alias, and authorization reference")
+        register_approved_root(args.config,**{name:getattr(args,name) for name in names}); return 0
     with build_runtime(args.config) as runtime:
         if args.command=="check": return 0
         import uvicorn
@@ -122,6 +144,15 @@ def _private_directory(path:Path)->Path:
     status=path.lstat()
     if not stat.S_ISDIR(status.st_mode) or stat.S_ISLNK(status.st_mode) or (hasattr(os,"geteuid") and status.st_uid!=os.geteuid()) or stat.S_IMODE(status.st_mode)!=0o700: raise PermissionError("state directory must be owner-only")
     return path
+
+def _replace_private_json(path:Path,value:Mapping[str,object])->None:
+    _replace_private_bytes(path,json.dumps(value,sort_keys=True,separators=(",",":")).encode())
+def _replace_private_bytes(path:Path,value:bytes)->None:
+    fd,name=__import__("tempfile").mkstemp(prefix=".config-",dir=path.parent); temp=Path(name)
+    try:
+        with os.fdopen(fd,"wb") as output: output.write(value); output.flush(); os.fsync(output.fileno())
+        temp.chmod(0o600); os.replace(temp,path)
+    finally: temp.unlink(missing_ok=True)
 
 def _backup_bindings(value:object)->tuple[BackupBinding,...]:
     if not isinstance(value,list): raise ValueError("backup_bindings must be a list")

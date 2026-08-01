@@ -95,6 +95,13 @@ class SQLiteRootRegistry:
             self._reject_overlap(root)
             self._insert(payload, info, approval.approval_id, digest)
 
+    def registration_target_digest(self, *, project_id: str, root_id: str, policy_revision: str, host_path: str | Path, alias: str, max_bytes: int) -> str:
+        """Return the exact Overseer approval target after normal validation."""
+        self._validate_text(project_id,"project_id"); self._validate_text(root_id,"root_id"); self._validate_text(policy_revision,"policy_revision"); self._validate_text(alias,"alias")
+        if max_bytes<1: raise RegistryFailure("INVALID_ARGUMENT","max_bytes must be positive")
+        root,info=self._validate_root(host_path); payload=self._payload(project_id,root_id,policy_revision,root,alias,"active",max_bytes)
+        return "sha256:"+hashlib.sha256(json.dumps(self._approval_payload(payload,info),sort_keys=True,separators=(",",":")).encode()).hexdigest()
+
     def transition(self, *, project_id: str, root_id: str, current_revision: str, policy_revision: str, status: str, max_bytes: int | None = None) -> None:
         if status not in {"active", "suspended", "retired"}: raise RegistryFailure("INVALID_ARGUMENT", "status is invalid")
         with self._transaction():
