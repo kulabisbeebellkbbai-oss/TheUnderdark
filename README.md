@@ -33,6 +33,11 @@ See [the approved project summary](docs/a-team-summary.md) and
 [security boundaries](docs/security-boundaries.md) for the initial contract.
 The [Overseer integration findings](docs/overseer-integration.md) capture the
 verified current blocker.
+The [approved A-Team plan](docs/a-team-plan.md) defines ownership and approval
+boundaries for implementation.
+The first approved design slice consists of the
+[bounded storage contract](docs/storage-contract.md) and
+[threat model](docs/threat-model.md).
 
 ## Repository layout
 
