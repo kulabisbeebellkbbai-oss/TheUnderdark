@@ -38,6 +38,9 @@ boundaries for implementation.
 The first approved design slice consists of the
 [bounded storage contract](docs/storage-contract.md) and
 [threat model](docs/threat-model.md).
+The proposed [Overseer adapter contract](docs/overseer-adapter-contract.md)
+defines the separately gated registry, approval, dispatch, and reconciliation
+integration.
 
 ## Repository layout
 
