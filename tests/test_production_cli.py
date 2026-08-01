@@ -2,6 +2,11 @@ import importlib, json, os, socket
 from pathlib import Path
 import pytest
 
+def test_production_runtime_dependency_is_declared():
+    import tomllib
+    project=tomllib.loads((Path(__file__).parents[1]/"pyproject.toml").read_text())["project"]
+    assert any(value.startswith("uvicorn>=") for value in project["dependencies"])
+
 def private(path:Path,data:bytes): path.write_bytes(data); path.chmod(0o600)
 def config(tmp_path:Path):
     state=tmp_path/"state"; state.mkdir(); state.chmod(0o700); token=tmp_path/"token"; key=tmp_path/"key"; cfg=tmp_path/"config.json"
