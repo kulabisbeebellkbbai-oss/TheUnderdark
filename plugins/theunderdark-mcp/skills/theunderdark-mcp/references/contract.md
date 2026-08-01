@@ -2,6 +2,12 @@
 
 The repository's normative contracts remain authoritative. This portable summary prevents accidental widening of the agent surface.
 
+## Transport and readiness
+
+The configured server name is `theunderdark`; the endpoint is the local client-spawned command `theunderdark-mcp serve --stdio`. It allocates no port and must not be replaced with an external URL without a separate reviewed design. Installation-specific secrets, authorization records, roots, and database paths remain outside this plugin.
+
+Verify configuration with `codex mcp get theunderdark`, then call `underdark_health_get`. If either fails, report the failure and stop; never substitute direct filesystem or shell execution.
+
 ## Read-only tools
 
 - `underdark_health_get`

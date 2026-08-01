@@ -33,4 +33,9 @@ def create_mcp_server(service: StorageService) -> FastMCP:
     def path_move(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, source_relative_path: str, relative_path: str, expected_source_digest: dict[str, str] | None = None, expected_source_type: str | None = None, destination_mode: str = "create_only") -> dict[str, Any]: return service.path_move(**locals())
     @mcp.tool(name="underdark_path_delete")
     def path_delete(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, relative_path: str, expected_type: str, expected_digest: dict[str, str] | None = None, recursive: bool = False) -> dict[str, Any]: return service.path_delete(**locals())
+
+    for tool in mcp._tool_manager._tools.values():
+        tool.fn_metadata.arg_model.model_config["extra"] = "forbid"
+        tool.fn_metadata.arg_model.model_rebuild(force=True)
+        tool.parameters = tool.fn_metadata.arg_model.model_json_schema(by_alias=True)
     return mcp

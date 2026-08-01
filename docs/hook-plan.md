@@ -4,7 +4,7 @@ This repository contains hook source only. Nothing in `plugins/theunderdark-mcp/
 
 ## Intended behavior
 
-The `UserPromptSubmit` preflight is advisory and activates only for explicit TheUnderdark, named `underdark_*` tool, storage-adapter, or Roadex/DonutHole storage language. It reminds the agent to use the MCP route and exact Overseer authorization for mutations. It performs no health probe and reserves no port.
+The `UserPromptSubmit` preflight activates only for explicit TheUnderdark, named `underdark_*` tool, storage-adapter, or Roadex/DonutHole storage language. It fails early with a configuration-only remediation when the stdio executable is absent; otherwise it reminds the agent to use the MCP route and exact Overseer authorization for mutations. It performs no network health probe and reserves no port.
 
 The `Stop` guard applies the same narrow domain match and only blocks an execution-oriented answer when it lacks recognizable TheUnderdark MCP evidence. Read-only discussion, design work, and unrelated storage requests pass unchanged.
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -76,6 +77,14 @@ def main() -> int:
     data = payload()
     if args.preflight:
         if DOMAIN.search(prompt_text(data)):
+            if shutil.which("theunderdark-mcp") is None:
+                print(
+                    "TheUnderdark MCP is required but its configured stdio executable "
+                    "`theunderdark-mcp` is unavailable. Do not execute storage work. Verify the "
+                    "reviewed plugin installation and run `codex mcp get theunderdark`.",
+                    file=sys.stderr,
+                )
+                return 2
             print(json.dumps({
                 "continue": True,
                 "suppressOutput": True,

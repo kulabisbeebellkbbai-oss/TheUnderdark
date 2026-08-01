@@ -40,6 +40,17 @@ def underdark_path_move(project_id: str, root_id: str, request_id: str, idempote
 def underdark_path_delete(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, relative_path: str, expected_type: str, expected_digest: dict[str, str] | None = None, recursive: bool = False) -> dict[str, Any]:
     return adapter.path_delete(**locals())
 
+
+def _forbid_unknown_tool_arguments(server: FastMCP) -> None:
+    """Make FastMCP's generated argument models fail closed on extra keys."""
+    for tool in server._tool_manager._tools.values():
+        tool.fn_metadata.arg_model.model_config["extra"] = "forbid"
+        tool.fn_metadata.arg_model.model_rebuild(force=True)
+        tool.parameters = tool.fn_metadata.arg_model.model_json_schema(by_alias=True)
+
+
+_forbid_unknown_tool_arguments(mcp)
+
 def main() -> None:
     """Run the fixture server over client-spawned stdio only."""
     parser = argparse.ArgumentParser(prog="theunderdark-mcp")
