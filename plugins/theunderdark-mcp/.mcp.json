@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "theunderdark": {
+      "command": "theunderdark-mcp",
+      "args": ["serve", "--stdio"]
+    }
+  }
+}

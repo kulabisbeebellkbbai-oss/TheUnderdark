@@ -49,5 +49,20 @@ integration.
 - `assets/` — non-secret project assets
 - `docs/` — architecture, security, and operator documentation
 
-Build, test, and run commands will be added with the first approved
-implementation slice.
+## Fixture-only development
+
+The current implementation is deliberately limited to client-spawned stdio and
+temporary fixture roots. It is not registered with Overseer and cannot operate
+on persistent project storage through its public API.
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[test]'
+.venv/bin/pytest -q
+```
+
+The installed `theunderdark-mcp serve --stdio` command exposes the bounded MCP
+tool inventory with an empty fixture control plane. Tests construct explicit
+temporary registrations and authorizations in process. Streamable HTTP,
+persistent configuration, a shared port, and service installation remain later
+approval-gated stages.

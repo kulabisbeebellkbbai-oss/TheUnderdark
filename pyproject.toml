@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "theunderdark"
+version = "0.1.0"
+description = "Bounded storage execution adapter for Overseer workflows"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.28.1,<2",
+  "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+theunderdark-mcp = "theunderdark.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/theunderdark", "src/underdark"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"

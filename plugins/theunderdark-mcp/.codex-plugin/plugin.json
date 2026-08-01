@@ -1,0 +1,21 @@
+{
+  "name": "theunderdark-mcp",
+  "version": "0.1.0",
+  "description": "Agent guidance and portable MCP configuration for approved TheUnderdark storage workflows.",
+  "author": {
+    "name": "TheUnderdark contributors"
+  },
+  "repository": "https://github.com/kulabisbeebellkbbai-oss/TheUnderdark",
+  "keywords": ["mcp", "storage", "overseer", "roadex"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "TheUnderdark MCP",
+    "shortDescription": "Run approved bounded storage workflows.",
+    "longDescription": "Guides agents through registered, approval-bound TheUnderdark storage operations and redacted evidence verification.",
+    "developerName": "TheUnderdark contributors",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": "Use TheUnderdark to inspect a registered project root or execute an explicitly approved storage operation."
+  },
+  "mcpServers": "./.mcp.json"
+}

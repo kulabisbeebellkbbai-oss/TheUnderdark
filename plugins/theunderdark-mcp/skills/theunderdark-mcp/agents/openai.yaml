@@ -1,0 +1,4 @@
+interface:
+  display_name: "TheUnderdark MCP"
+  short_description: "Run approved bounded storage workflows"
+  default_prompt: "Use $theunderdark-mcp to prepare and execute an approved bounded storage operation."

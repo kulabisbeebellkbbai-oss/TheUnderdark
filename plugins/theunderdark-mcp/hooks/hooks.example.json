@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 <PLUGIN_ROOT>/hooks/theunderdark_mcp_guard.py --preflight",
+            "timeout": 10,
+            "statusMessage": "Routing bounded storage work"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 <PLUGIN_ROOT>/hooks/theunderdark_mcp_guard.py --stop-check",
+            "timeout": 10,
+            "statusMessage": "Checking TheUnderdark MCP evidence"
+          }
+        ]
+      }
+    ]
+  }
+}
