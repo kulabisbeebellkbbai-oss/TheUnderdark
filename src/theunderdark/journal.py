@@ -183,7 +183,7 @@ class SQLiteOperationJournal:
             current = self.get(operation_id)
             if state not in TRANSITIONS[current.state]: raise JournalTransitionError(f"illegal transition {current.state.value} -> {state.value}")
             changed = current.host_state_changed if host_state_changed is None else host_state_changed
-            if state == OperationState.SUCCEEDED and changed != True: raise JournalTransitionError("success requires verified host_state_changed=true")
+            if state == OperationState.SUCCEEDED and changed is not True and not (current.action.startswith("backup.") and changed is False): raise JournalTransitionError("success requires verified host-state evidence")
             if state in {OperationState.ACCEPTED, OperationState.AUTHORIZED, OperationState.CANCELLED} and changed not in {False, "false"}: raise JournalTransitionError("pre-execution state cannot report host mutation")
             self._connection.execute("UPDATE operations SET state=?, host_state_changed=?, result=?, error_code=?, updated_at=? WHERE operation_id=?", (state.value, _changed(changed), _json(result) if result is not None else None, error_code, timestamp, operation_id))
             self._append_transition(operation_id, current.state, state, timestamp, summary)

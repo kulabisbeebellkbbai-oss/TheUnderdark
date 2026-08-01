@@ -11,7 +11,7 @@ def private(path:Path,data:bytes): path.write_bytes(data); path.chmod(0o600)
 def config(tmp_path:Path):
     state=tmp_path/"state"; state.mkdir(); state.chmod(0o700); token=tmp_path/"token"; key=tmp_path/"key"; cfg=tmp_path/"config.json"
     private(token,b"test-token\n"); private(key,b"k"*32)
-    value={"host":"127.0.0.1","port":8799,"state_dir":str(state),"journal_path":str(state/"journal.sqlite3"),"admission_path":str(state/"admission.sqlite3"),"pagination_path":str(state/"pages.sqlite3"),"registry_path":str(state/"roots.sqlite3"),"overseer_authorization_endpoint":"http://127.0.0.1:8766/storage/authorizations/verify","overseer_root_endpoint":"http://127.0.0.1:8766/storage/roots/verify","overseer_token_file":str(token),"cursor_key_file":str(key),"root_authorization_refs":{},"limits":{"max_storage_bytes":1024,"max_concurrent_operations":1,"max_requests_per_window":10,"rate_window_seconds":60}}
+    value={"host":"127.0.0.1","port":8799,"state_dir":str(state),"journal_path":str(state/"journal.sqlite3"),"admission_path":str(state/"admission.sqlite3"),"pagination_path":str(state/"pages.sqlite3"),"registry_path":str(state/"roots.sqlite3"),"overseer_authorization_endpoint":"http://127.0.0.1:8766/storage/authorizations/verify","overseer_root_endpoint":"http://127.0.0.1:8766/storage/roots/verify","overseer_token_file":str(token),"cursor_key_file":str(key),"root_authorization_refs":{},"backup_bindings":[],"limits":{"max_storage_bytes":1024,"max_concurrent_operations":1,"max_requests_per_window":10,"rate_window_seconds":60}}
     private(cfg,json.dumps(value).encode()); return cfg,value
 
 def test_import_has_no_socket_or_file_side_effect(tmp_path,monkeypatch):

@@ -78,6 +78,7 @@ def test_production_mcp_has_strict_bounded_inventory(tmp_path) -> None:
         "underdark_project_get", "underdark_root_get", "underdark_path_stat",
         "underdark_directory_list", "underdark_operation_get", "underdark_health_get", "underdark_directory_create",
         "underdark_file_write", "underdark_path_copy", "underdark_path_move", "underdark_path_delete",
+        "underdark_backup_create", "underdark_backup_verify_restore",
     }
     assert all(tool.inputSchema.get("additionalProperties") is False for tool in tools)
     assert invalid.isError is True

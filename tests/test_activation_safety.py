@@ -37,6 +37,7 @@ def launcher_config(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         "overseer_token_file": str(token),
         "cursor_key_file": str(cursor),
         "root_authorization_refs": {},
+        "backup_bindings": [],
         "limits": {
             "max_storage_bytes": 1024,
             "max_concurrent_operations": 1,
@@ -167,3 +168,22 @@ def test_check_path_composes_and_closes_without_importing_uvicorn_or_binding(tmp
     assert ("uvicorn" in sys.modules) is before
     state = tmp_path / "state"
     assert all(path.stat().st_mode & 0o077 == 0 for path in state.iterdir())
+
+def test_backup_bindings_are_required_exact_private_and_non_wildcard(tmp_path: Path) -> None:
+    from theunderdark.production_cli import build_runtime
+    config,value=launcher_config(tmp_path)
+    del value["backup_bindings"]; rewrite(config,value)
+    with pytest.raises(ValueError,match="exact supported fields"): build_runtime(config)
+
+    source=tmp_path/"source"; artifacts=tmp_path/"artifacts"; source.mkdir(); artifacts.mkdir(mode=0o700)
+    phrase=tmp_path/"backup.passphrase"; owner_file(phrase,b"fixture")
+    value["backup_bindings"]=[{"project_id":"*","root_id":"work","policy_revision":"1","source_root":str(source),"artifact_dir":str(artifacts),"passphrase_file":str(phrase),"gpg_executable":"/usr/bin/gpg"}]
+    rewrite(config,value)
+    with pytest.raises(ValueError,match="opaque IDs"): build_runtime(config)
+
+    for invalid in ("with space","with\nnewline","control\x00byte"):
+        value["backup_bindings"][0]["project_id"]=invalid; rewrite(config,value)
+        with pytest.raises(ValueError,match="opaque IDs"): build_runtime(config)
+
+    value["backup_bindings"][0]["project_id"]="roadex"; artifacts.chmod(0o755); rewrite(config,value)
+    with pytest.raises(PermissionError,match="owner-only"): build_runtime(config)

@@ -104,6 +104,14 @@ def create_production_mcp(service: ProductionStorageService) -> FastMCP:
     def path_delete(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, relative_path: str, expected_type: str, expected_digest: dict[str, str] | None = None, recursive: bool = False) -> dict[str, Any]:
         return service.path_delete(**locals())
 
+    @mcp.tool(name="underdark_backup_create")
+    def backup_create(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, source_root_id: str, retention_count: int, encryption_profile: str) -> dict[str, Any]:
+        return service.backup_create(**locals())
+
+    @mcp.tool(name="underdark_backup_verify_restore")
+    def backup_verify_restore(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, artifact_id: str, expected_artifact_digest: str, expected_manifest_digest: str) -> dict[str, Any]:
+        return service.backup_verify_restore(**locals())
+
     _strict(mcp)
     return mcp
 

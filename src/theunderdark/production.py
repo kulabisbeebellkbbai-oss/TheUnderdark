@@ -29,6 +29,8 @@ ACTION_FIELDS = {
     "path.copy": frozenset({"source_root_id", "source_relative_path", "relative_path", "destination_mode"}),
     "path.move": frozenset({"source_relative_path", "relative_path", "expected_source_digest", "expected_source_type", "destination_mode"}),
     "path.delete": frozenset({"relative_path", "expected_type", "expected_digest", "recursive"}),
+    "backup.create": frozenset({"source_root_id", "retention_count", "encryption_profile"}),
+    "backup.verify_restore": frozenset({"artifact_id", "expected_manifest_digest", "expected_artifact_digest"}),
 }
 
 
@@ -40,6 +42,10 @@ class BoundedMutationExecutor(Protocol):
     """Execution boundary expected to use RootHandle/fscontain primitives."""
     def execute(self, action: str, request: Mapping[str, object]) -> Mapping[str, object]: ...
 
+class BackupExecutor(Protocol):
+    def execute(self) -> Mapping[str, object]: ...
+    def verify_restore(self, *, artifact_id: str, expected_manifest_digest: str, expected_artifact_digest: str) -> Mapping[str, object]: ...
+
 
 class ReadBackend(Protocol):
     def project_get(self, project_id: str) -> Mapping[str, object]: ...
@@ -49,12 +55,13 @@ class ReadBackend(Protocol):
 
 
 class ProductionStorageService:
-    def __init__(self, *, journal: SQLiteOperationJournal, verifier: AuthorizationVerifier, executor: BoundedMutationExecutor, admission: SQLiteAdmissionController | None = None, admission_limits: Callable[[str], AdmissionLimits] | None = None, read_backend: ReadBackend | None = None, paginator: SQLiteSnapshotPaginator | None = None) -> None:
+    def __init__(self, *, journal: SQLiteOperationJournal, verifier: AuthorizationVerifier, executor: BoundedMutationExecutor, admission: SQLiteAdmissionController | None = None, admission_limits: Callable[[str], AdmissionLimits] | None = None, read_backend: ReadBackend | None = None, paginator: SQLiteSnapshotPaginator | None = None, backup_executor_provider: Callable[[str,str,str],BackupExecutor] | None = None) -> None:
         if journal is None or verifier is None or executor is None:
             raise TypeError("journal, verifier, and bounded executor are required")
         self.journal, self.verifier, self.executor = journal, verifier, executor
         self.admission, self.admission_limits = admission, admission_limits
         self.read_backend, self.paginator = read_backend, paginator
+        self.backup_executor_provider = backup_executor_provider
         self.recovered_operations = journal.recover_interrupted()
 
     def directory_create(self, **request: object) -> dict[str, Any]: return self._submit("directory.create", request)
@@ -62,6 +69,8 @@ class ProductionStorageService:
     def path_copy(self, **request: object) -> dict[str, Any]: return self._submit("path.copy", request)
     def path_move(self, **request: object) -> dict[str, Any]: return self._submit("path.move", request)
     def path_delete(self, **request: object) -> dict[str, Any]: return self._submit("path.delete", request)
+    def backup_create(self, **request: object) -> dict[str, Any]: return self._submit("backup.create", request)
+    def backup_verify_restore(self, **request: object) -> dict[str, Any]: return self._submit("backup.verify_restore", request)
 
     def project_get(self, project_id: str, request_id: str = "read") -> dict[str, Any]:
         return self._read(request_id, lambda: self.read_backend.project_get(project_id) if self.read_backend else _missing_read())
@@ -156,7 +165,14 @@ class ProductionStorageService:
             operation = self.journal.transition(operation.operation_id, OperationState.AUTHORIZED, summary="authoritative approval snapshot verified")
             operation = self.journal.transition(operation.operation_id, OperationState.EXECUTING, summary="bounded executor entered")
             try:
-                result = dict(self.executor.execute(action, request))
+                if action.startswith("backup."):
+                    if self.backup_executor_provider is None: raise ProductionFailure("DEPENDENCY_UNAVAILABLE","The bounded backup provider is unavailable.")
+                    backup=self.backup_executor_provider(project_id,str(request["root_id"]),str(request["policy_revision"]))
+                    if action=="backup.create":
+                        outcome=dict(backup.execute()); result=dict(outcome.get("result",{})); result["manifest_digest"]="sha256:"+str(result["manifest_digest"]); result["artifact_digest"]="sha256:"+str(result["artifact_digest"]); result.update({"verified":True,"host_state_changed":bool(outcome.get("evidence",{}).get("host_state_changed"))})
+                    else:
+                        result=dict(backup.verify_restore(artifact_id=str(request["artifact_id"]),expected_manifest_digest=str(request["expected_manifest_digest"]),expected_artifact_digest=str(request["expected_artifact_digest"])))
+                else: result = dict(self.executor.execute(action, request))
             except Exception:
                 # Executor exceptions are deliberately minimized; once entered,
                 # the service cannot prove whether host state changed.
@@ -165,11 +181,12 @@ class ProductionStorageService:
                 return self._envelope(operation)
             verified = result.pop("verified", None)
             changed = result.pop("host_state_changed", None)
-            if verified is not True or changed is not True:
+            valid_changed = isinstance(changed,bool) and (action.startswith("backup.") or changed is True)
+            if verified is not True or not valid_changed:
                 operation = self.journal.transition(operation.operation_id, OperationState.INDETERMINATE, host_state_changed="unknown", result=result, error_code="VERIFY_FAILED", summary="executor postcondition evidence was incomplete")
                 if reservation: self.admission.hold_for_recovery(reservation.reservation_id)
             else:
-                operation = self.journal.transition(operation.operation_id, OperationState.SUCCEEDED, host_state_changed=True, result=result, summary="postconditions verified")
+                operation = self.journal.transition(operation.operation_id, OperationState.SUCCEEDED, host_state_changed=changed, result=result, summary="postconditions verified")
                 if reservation: self.admission.commit(reservation.reservation_id, min(reservation.growth_bytes, max(0, int(result.get("bytes", 0)))))
             return self._envelope(operation)
         except ProductionFailure as error:
@@ -191,7 +208,19 @@ class ProductionStorageService:
             value = request[name]
             if not isinstance(value, str) or not value or len(value) > (512 if name == "reason" else 128):
                 raise ProductionFailure("INVALID_ARGUMENT", f"{name} is invalid.")
-        if "relative_path" not in request: raise ProductionFailure("INVALID_ARGUMENT", "relative_path is required.")
+        if action not in {"backup.create","backup.verify_restore"} and "relative_path" not in request: raise ProductionFailure("INVALID_ARGUMENT", "relative_path is required.")
+        required=ACTION_FIELDS[action] if action.startswith("backup.") else frozenset()
+        if not required <= set(request): raise ProductionFailure("INVALID_ARGUMENT","Required action fields are missing.")
+        for name in required:
+            value=request[name]
+            if name=="retention_count":
+                if isinstance(value,bool) or value!=3: raise ProductionFailure("INVALID_ARGUMENT","retention_count is invalid.")
+            elif not isinstance(value,str) or not value or len(value)>128: raise ProductionFailure("INVALID_ARGUMENT",f"{name} is invalid.")
+        if action=="backup.create" and (request["source_root_id"]!=request["root_id"] or request["encryption_profile"]!="gpg-symmetric-aes256-iterated-s2k"):
+            raise ProductionFailure("INVALID_ARGUMENT","backup creation parameters are invalid.")
+        if action=="backup.verify_restore":
+            if not str(request["artifact_id"]).startswith("backup-") or any(not _sha256(value) for value in (request["expected_manifest_digest"],request["expected_artifact_digest"])):
+                raise ProductionFailure("INVALID_ARGUMENT","backup verification parameters are invalid.")
 
     @staticmethod
     def _validate_authorization(snapshot: AuthorizationSnapshot, action: str, request: Mapping[str, object], digest: str) -> None:
@@ -202,7 +231,7 @@ class ProductionStorageService:
 
     def _envelope(self, operation: JournalOperation) -> dict[str, Any]:
         evidence = [str(row["evidence_id"]) for row in self.journal.transitions(operation.operation_id)]
-        base = {"contract_version": CONTRACT_VERSION, "request_id": operation.request_id, "operation_id": operation.operation_id, "evidence": {"evidence_ids": evidence, "host_state_changed": operation.host_state_changed, "redactions_applied": False}}
+        base = {"contract_version": CONTRACT_VERSION, "request_id": operation.request_id, "operation_id": operation.operation_id, "evidence": {"evidence_ids": evidence, "host_state_changed": operation.host_state_changed, "redactions_applied": operation.action.startswith("backup.")}}
         if operation.state in {OperationState.FAILED, OperationState.INDETERMINATE, OperationState.CANCELLED}:
             return {"ok": False, **base, "error": {"code": operation.error_code or "EXECUTION_FAILED", "message": "The durable operation did not reach verified success.", "retryable": False, "details": {}}, "result": {"state": operation.state.value}}
         return {"ok": True, **base, "result": {"state": operation.state.value, **dict(operation.result or {})}}
@@ -238,6 +267,9 @@ class ProductionFailure(RuntimeError):
 def _request_digest(action: str, request: Mapping[str, object]) -> str:
     payload = json.dumps({"action": action, "request": request}, sort_keys=True, separators=(",", ":"), default=str).encode()
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+def _sha256(value:object)->bool:
+    text=str(value); return len(text)==71 and text.startswith("sha256:") and all(character in "0123456789abcdef" for character in text[7:])
 
 def _missing_read(): raise ProductionFailure("DEPENDENCY_UNAVAILABLE", "The bounded read backend is unavailable.")
 

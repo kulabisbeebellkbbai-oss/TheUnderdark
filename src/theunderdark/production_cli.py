@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Mapping
 from urllib.request import Request,urlopen
 
 from .admission import AdmissionLimits,SQLiteAdmissionController
+from .composition import BackupBinding,build_backup_executor_provider
 from .journal import SQLiteOperationJournal
 from .mutation_executor import FsContainMutationExecutor
 from .overseer_verifier import OverseerAuthorizationVerifier
@@ -50,7 +52,7 @@ class ProductionRuntime:
 
 def build_runtime(config_path:str|Path)->ProductionRuntime:
     config_file=_private_file(Path(config_path),"config",exact_mode=0o600); config=json.loads(config_file.read_text())
-    required={"host","port","state_dir","journal_path","admission_path","pagination_path","registry_path","overseer_authorization_endpoint","overseer_root_endpoint","overseer_token_file","cursor_key_file","root_authorization_refs","limits"}
+    required={"host","port","state_dir","journal_path","admission_path","pagination_path","registry_path","overseer_authorization_endpoint","overseer_root_endpoint","overseer_token_file","cursor_key_file","root_authorization_refs","limits","backup_bindings"}
     if set(config)!=required: raise ValueError("production config must contain the exact supported fields")
     bind=_Bind(str(config["host"]),int(config["port"])); state_dir=_private_directory(Path(str(config["state_dir"])))
     paths=[Path(str(config[name])) for name in ("journal_path","admission_path","pagination_path","registry_path")]
@@ -69,6 +71,7 @@ def build_runtime(config_path:str|Path)->ProductionRuntime:
     references=config["root_authorization_refs"]
     if not isinstance(references,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not v for k,v in references.items()): raise ValueError("root authorization reference map is invalid")
     root_verifier=OverseerRootControlVerifier(endpoint=str(config["overseer_root_endpoint"]),token_provider=token_provider,authorization_ref_provider=lambda _a,_p,d: references[d],http_client=transport)
+    backup_bindings=_backup_bindings(config["backup_bindings"])
     resources=[]; prior_umask=os.umask(0o077)
     try:
         registry=SQLiteRootRegistry(paths[3],verifier=root_verifier,protected_paths=(state_dir,config_file,token_file,cursor_file)); resources.append(registry)
@@ -88,7 +91,8 @@ def build_runtime(config_path:str|Path)->ProductionRuntime:
         limits_data=config["limits"]
         if not isinstance(limits_data,dict): raise ValueError("limits must be an object")
         limits=AdmissionLimits(**limits_data)
-        service=ProductionStorageService(journal=journal,verifier=verifier,executor=executor,admission=admission,admission_limits=lambda _project:limits,read_backend=reads,paginator=paginator)
+        backup_provider=build_backup_executor_provider(registry,backup_bindings) if backup_bindings else None
+        service=ProductionStorageService(journal=journal,verifier=verifier,executor=executor,admission=admission,admission_limits=lambda _project:limits,read_backend=reads,paginator=paginator,backup_executor_provider=backup_provider)
     except Exception:
         for resource in reversed(resources):
             try: resource.close()
@@ -118,5 +122,20 @@ def _private_directory(path:Path)->Path:
     status=path.lstat()
     if not stat.S_ISDIR(status.st_mode) or stat.S_ISLNK(status.st_mode) or (hasattr(os,"geteuid") and status.st_uid!=os.geteuid()) or stat.S_IMODE(status.st_mode)!=0o700: raise PermissionError("state directory must be owner-only")
     return path
+
+def _backup_bindings(value:object)->tuple[BackupBinding,...]:
+    if not isinstance(value,list): raise ValueError("backup_bindings must be a list")
+    expected={"project_id","root_id","policy_revision","source_root","artifact_dir","passphrase_file","gpg_executable"}; bindings=[]; identities=set()
+    for item in value:
+        if not isinstance(item,dict) or set(item)!=expected: raise ValueError("each backup binding must contain the exact supported fields")
+        identity=tuple(item[name] for name in ("project_id","root_id","policy_revision"))
+        if any(not isinstance(part,str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",part) is None for part in identity) or identity in identities: raise ValueError("backup binding identity must be unique, exact, and use opaque IDs")
+        identities.add(identity)
+        source=Path(str(item["source_root"])); artifact=Path(str(item["artifact_dir"])); phrase=Path(str(item["passphrase_file"])); gpg=Path(str(item["gpg_executable"]))
+        if not source.is_absolute() or source.is_symlink() or not source.is_dir(): raise ValueError("backup source must be an absolute non-symlink directory")
+        _private_directory(artifact); _private_file(phrase,"backup passphrase",exact_mode=0o600)
+        if not gpg.is_absolute() or gpg.is_symlink() or not gpg.is_file() or not os.access(gpg,os.X_OK): raise ValueError("GPG executable must be an absolute executable regular file")
+        bindings.append(BackupBinding(str(identity[0]),str(identity[1]),str(identity[2]),source,artifact,phrase,str(gpg)))
+    return tuple(bindings)
 
 if __name__=="__main__": raise SystemExit(main())
