@@ -59,6 +59,42 @@ def test_directory_snapshot_is_sorted_and_stable(configured) -> None:
     assert third[0] != first[0]
 
 
+def test_directory_snapshot_allows_root_path_and_preserves_child_names(configured) -> None:
+    backend, root = configured
+    (root / "child-dir").mkdir()
+    (root / "alpha").write_text("a")
+    (root / "zeta").write_text("z")
+    _, entries = backend.directory_snapshot("roadex", "work", "")
+    assert [entry["name"] for entry in entries] == ["alpha", "child-dir", "zeta"]
+    assert all("/" not in entry["name"] for entry in entries)
+
+
+def test_directory_snapshot_root_path_closes_directory_duplicate_once(configured, monkeypatch) -> None:
+    backend, _ = configured
+    duplicates: list[int] = []
+    close_calls: list[int] = []
+    real_dup = os.dup
+    real_close = os.close
+
+    def tracked_dup(fd: int) -> int:
+        descriptor = real_dup(fd)
+        duplicates.append(descriptor)
+        return descriptor
+
+    def tracked_close(fd: int) -> None:
+        if fd in duplicates:
+            close_calls.append(fd)
+        return real_close(fd)
+
+    monkeypatch.setattr(os, "dup", tracked_dup)
+    monkeypatch.setattr(os, "close", tracked_close)
+    backend.directory_snapshot("roadex", "work", "")
+
+    assert len(duplicates) == 1
+    assert len(close_calls) == 1
+    assert close_calls[0] == duplicates[0]
+
+
 def test_snapshot_denies_symlink_special_and_hardlink_entries(configured, tmp_path: Path) -> None:
     backend, root = configured
     for name, create in (

@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
 
-from .fscontain import ContainmentError, FileIdentity, RootHandle
+from .fscontain import ContainmentError, FileIdentity, OpenedFile, RootHandle
 from .mutation_executor import ResolvedRoot
 
 
@@ -109,7 +109,7 @@ class FsContainReadBackend:
         relative_path: str,
     ) -> Mapping[str, object]:
         binding = self._resolve(project_id, root_id)
-        with self._root_context(binding.root) as root, root.open_directory(relative_path) as directory:
+        with self._root_context(binding.root) as root, self._directory_context(root, relative_path) as directory:
             before_info = os.fstat(directory.descriptor)
             entries = [
                 self._inspect_child(root, binding.alias, relative_path, name)
@@ -132,7 +132,7 @@ class FsContainReadBackend:
             return f"sha256:{namespace_id}", tuple(entries)
 
     def _inspect_child(self, root: RootHandle, alias: str, parent: str, name: str) -> dict[str, object]:
-        relative = f"{parent}/{name}"
+        relative = name if parent == "" else f"{parent}/{name}"
         try:
             with root.open_regular(relative) as opened:
                 info = os.fstat(opened.descriptor)
@@ -218,6 +218,23 @@ class FsContainReadBackend:
     @staticmethod
     def _read_failure(error: ContainmentError) -> ReadFailure:
         return ReadFailure(error.code, "descriptor-relative metadata read was denied")
+
+    @contextmanager
+    def _directory_context(self, root: RootHandle, relative_path: str) -> Iterator[OpenedFile]:
+        if relative_path:
+            with root.open_directory(relative_path) as directory:
+                yield directory
+            return
+        duplicate = os.dup(root.descriptor)
+        directory = OpenedFile(duplicate, FileIdentity.from_stat(os.fstat(duplicate)))
+        try:
+            if not stat.S_ISDIR(directory.identity.mode):
+                raise ReadFailure("PATH_INVALID", "registered root is not a directory")
+            yield directory
+        except ContainmentError as error:
+            raise self._read_failure(error) from error
+        finally:
+            directory.close()
 
     @staticmethod
     def _alias(alias: str, relative_path: str) -> str:

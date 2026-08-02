@@ -24,6 +24,18 @@ class Reads:
     def directory_snapshot(self,p,r,path): return "device:1/inode:2",tuple({"name":n,"type":"file","size":1} for n in ("b","c","d"))
 
 
+class ReadsAtRoot:
+    def project_get(self,p): return {"project_id":p,"status":"active"}
+    def root_get(self,p,r): return {"project_id":p,"root_id":r,"alias":"safe","policy_revision":"1"}
+    def path_stat(self,p,r,path,include_digest=False): return {"path":f"{p}/{r}/{path}","type":"file","size":1}
+    def directory_snapshot(self,p,r,path):
+        assert path == ""
+        return "device:1/inode:2", (
+            {"name":"a","type":"file","size":1,"modified_ns":1,"identity":"id-a"},
+            {"name":"b","type":"file","size":1,"modified_ns":2,"identity":"id-b"},
+        )
+
+
 def request():
     return dict(project_id="project",root_id="root",request_id="req",idempotency_key="key",authorization_ref="auth",policy_revision="1",reason="bounded test",relative_path="result",parents=False)
 
@@ -93,3 +105,11 @@ def test_admission_is_committed_and_read_pages_are_stable(tmp_path):
         project=service.project_get("project"); assert project["result"]["project_id"]=="project" and project["evidence"]["host_state_changed"] is False
         first=service.directory_list("project","root","dir","1",limit=2); second=service.directory_list("project","root","dir","1",cursor=first["result"]["next_cursor"],limit=2)
         assert [e["name"] for e in first["result"]["entries"]+second["result"]["entries"]]==["b","c","d"]
+
+
+def test_directory_list_allows_root_relative_path(tmp_path):
+    verifier=Verifier(); executor=Executor()
+    with SQLiteOperationJournal((tmp_path/"journal.sqlite3").resolve()) as journal, SQLiteSnapshotPaginator((tmp_path/"pages.sqlite3").resolve(),cursor_key=b"y"*32,max_page_size=10) as paginator:
+        service=ProductionStorageService(journal=journal,verifier=verifier,executor=executor,read_backend=ReadsAtRoot(),paginator=paginator)
+        result=service.directory_list("project","root","",policy_revision="1",limit=2)
+        assert result["ok"] and [e["name"] for e in result["result"]["entries"]] == ["a","b"]
