@@ -59,3 +59,18 @@ def test_register_root_failure_emits_only_redacted_stable_code(tmp_path,monkeypa
     assert result==2 and output.out==""
     assert json.loads(output.err)=={"ok":False,"error":{"code":"PRIVATE_STATE_INVALID"},"redactions_applied":True}
     assert "path" not in output.err and "token" not in output.err and "Traceback" not in output.err
+
+def test_register_root_composes_registry_before_backup_bindings(tmp_path,monkeypatch):
+    cfg,value=config(tmp_path)
+    source=tmp_path/"source"; source.mkdir()
+    artifact=tmp_path/"artifacts"; artifact.mkdir(); artifact.chmod(0o700)
+    phrase=tmp_path/"passphrase"; private(phrase,b"test-passphrase")
+    value["backup_bindings"]=[{"project_id":"project","root_id":"root","policy_revision":"1","source_root":str(source),"artifact_dir":str(artifact),"passphrase_file":str(phrase),"gpg_executable":"/usr/bin/gpg"}]
+    private(cfg,json.dumps(value).encode())
+    import theunderdark.production_cli as launcher
+    from theunderdark.root_registry import ControlPlaneApproval
+    monkeypatch.setattr(launcher.OverseerRootControlVerifier,"verify",lambda _self,action,payload,target:ControlPlaneApproval("approval",action,payload["project_id"],payload["root_id"],payload["policy_revision"],target,"approved","2099-01-01T00:00:00+00:00"))
+    digest=launcher.register_approved_root(cfg,project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1,authorization_ref="auth")
+    assert digest.startswith("sha256:")
+    with launcher.build_runtime(cfg) as runtime:
+        assert runtime.registry.root_ids("project")== ("root",)

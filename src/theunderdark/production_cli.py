@@ -51,7 +51,7 @@ class ProductionRuntime:
     def __exit__(self,*_): self.close()
 
 
-def build_runtime(config_path:str|Path)->ProductionRuntime:
+def build_runtime(config_path:str|Path,*,compose_backup_bindings:bool=True)->ProductionRuntime:
     config_file=_private_file(Path(config_path),"config",exact_mode=0o600); config=json.loads(config_file.read_text())
     required={"host","port","state_dir","journal_path","admission_path","pagination_path","registry_path","overseer_authorization_endpoint","overseer_root_endpoint","overseer_token_file","cursor_key_file","root_authorization_refs","limits","backup_bindings"}
     if set(config)!=required: raise ValueError("production config must contain the exact supported fields")
@@ -92,7 +92,7 @@ def build_runtime(config_path:str|Path)->ProductionRuntime:
         limits_data=config["limits"]
         if not isinstance(limits_data,dict): raise ValueError("limits must be an object")
         limits=AdmissionLimits(**limits_data)
-        backup_provider=build_backup_executor_provider(registry,backup_bindings) if backup_bindings else None
+        backup_provider=build_backup_executor_provider(registry,backup_bindings) if compose_backup_bindings and backup_bindings else None
         service=ProductionStorageService(journal=journal,verifier=verifier,executor=executor,admission=admission,admission_limits=lambda _project:limits,read_backend=reads,paginator=paginator,backup_executor_provider=backup_provider)
     except Exception:
         for resource in reversed(resources):
@@ -105,7 +105,11 @@ def register_approved_root(config_path:str|Path,*,project_id:str,root_id:str,pol
     """Register one exact root and durably bind its approved Overseer reference."""
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",authorization_ref) is None: raise ValueError("authorization_ref must be an opaque ID")
     config_file=_private_file(Path(config_path),"config",exact_mode=0o600); original=config_file.read_bytes()
-    with build_runtime(config_file) as runtime:
+    # Root registration must compose the registry before resolving backup
+    # bindings. Resolving the binding here would require the root that this
+    # operation is responsible for registering, creating a circular startup
+    # dependency. Normal check/serve startup still resolves every binding.
+    with build_runtime(config_file,compose_backup_bindings=False) as runtime:
         arguments={"project_id":project_id,"root_id":root_id,"policy_revision":policy_revision,"host_path":host_path,"alias":alias,"max_bytes":max_bytes}
         digest=runtime.registry.registration_target_digest(**arguments)
         config=json.loads(original); references=config["root_authorization_refs"]
