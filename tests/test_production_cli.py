@@ -60,7 +60,7 @@ def test_register_root_failure_emits_only_redacted_stable_code(tmp_path,monkeypa
     assert json.loads(output.err)=={"ok":False,"error":{"code":"PRIVATE_STATE_INVALID"},"redactions_applied":True}
     assert "path" not in output.err and "token" not in output.err and "Traceback" not in output.err
 
-def test_register_root_composes_registry_before_backup_bindings(tmp_path,monkeypatch):
+def test_register_root_composes_registry_before_backup_bindings_and_exact_retry_preserves_config(tmp_path,monkeypatch):
     cfg,value=config(tmp_path)
     source=tmp_path/"source"; source.mkdir()
     artifact=tmp_path/"artifacts"; artifact.mkdir(); artifact.chmod(0o700)
@@ -72,10 +72,16 @@ def test_register_root_composes_registry_before_backup_bindings(tmp_path,monkeyp
     with launcher.build_runtime(cfg,compose_backup_bindings=False) as runtime:
         digest=runtime.registry.registration_target_digest(project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1)
     value["root_authorization_refs"]={digest:"auth"}; private(cfg,json.dumps(value).encode())
-    original=cfg.read_bytes(); identity=(cfg.stat().st_dev,cfg.stat().st_ino)
-    monkeypatch.setattr(launcher.OverseerRootControlVerifier,"verify",lambda _self,action,payload,target:ControlPlaneApproval("approval",action,payload["project_id"],payload["root_id"],payload["policy_revision"],target,"approved","2099-01-01T00:00:00+00:00"))
-    result=launcher.register_approved_root(cfg,project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1,authorization_ref="auth")
-    assert result==digest and cfg.read_bytes()==original and (cfg.stat().st_dev,cfg.stat().st_ino)==identity
+    original=cfg.read_bytes(); identity=(cfg.stat().st_dev,cfg.stat().st_ino); mode=cfg.stat().st_mode&0o777; approvals=[]
+    def approve(_self,action,payload,target):
+        approvals.append(target)
+        return ControlPlaneApproval("approval",action,payload["project_id"],payload["root_id"],payload["policy_revision"],target,"approved","2099-01-01T00:00:00+00:00")
+    monkeypatch.setattr(launcher.OverseerRootControlVerifier,"verify",approve)
+    arguments=dict(project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1,authorization_ref="auth")
+    first=launcher.register_approved_root(cfg,**arguments)
+    second=launcher.register_approved_root(cfg,**arguments)
+    assert first==second==digest and approvals==[digest,digest]
+    assert cfg.read_bytes()==original and (cfg.stat().st_dev,cfg.stat().st_ino)==identity and cfg.stat().st_mode&0o777==mode==0o600
     with launcher.build_runtime(cfg) as runtime:
         assert runtime.registry.root_ids("project")== ("root",)
 

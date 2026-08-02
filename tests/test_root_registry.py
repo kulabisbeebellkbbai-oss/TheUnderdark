@@ -64,6 +64,47 @@ def test_exact_approval_is_required_before_write(tmp_path: Path, root: Path) -> 
         assert registry.project_roots("roadex") == ()
 
 
+def test_exact_registration_retry_revalidates_approval_without_write(tmp_path: Path, root: Path) -> None:
+    approver=Approver()
+    with SQLiteRootRegistry((tmp_path/"roots.sqlite3").resolve(),verifier=approver) as registry:
+        register(registry,root)
+        before=registry._connection.execute("SELECT * FROM root_revisions").fetchall()
+        changes=registry._connection.total_changes
+        register(registry,root)
+        after=registry._connection.execute("SELECT * FROM root_revisions").fetchall()
+        assert len(approver.payloads)==2
+        assert after==before and registry._connection.total_changes==changes
+
+
+@pytest.mark.parametrize("changes",[
+    {"policy_revision":"2"},
+    {"alias":"another"},
+    {"max_bytes":64},
+])
+def test_conflicting_registration_retry_revalidates_then_rejects_without_write(tmp_path: Path, root: Path, changes) -> None:
+    approver=Approver()
+    with SQLiteRootRegistry((tmp_path/"roots.sqlite3").resolve(),verifier=approver) as registry:
+        register(registry,root)
+        before=registry._connection.execute("SELECT * FROM root_revisions").fetchall()
+        total=registry._connection.total_changes
+        assert_failure("ROOT_EXISTS",lambda:register(registry,root,**changes))
+        assert len(approver.payloads)==2
+        assert registry._connection.execute("SELECT * FROM root_revisions").fetchall()==before
+        assert registry._connection.total_changes==total
+
+
+def test_registration_retry_rejects_replaced_root_identity_after_reapproval(tmp_path: Path, root: Path) -> None:
+    approver=Approver()
+    with SQLiteRootRegistry((tmp_path/"roots.sqlite3").resolve(),verifier=approver) as registry:
+        register(registry,root)
+        before=registry._connection.execute("SELECT * FROM root_revisions").fetchall(); total=registry._connection.total_changes
+        moved=root.with_name("original"); root.rename(moved); root.mkdir()
+        assert_failure("ROOT_EXISTS",lambda:register(registry,root))
+        assert len(approver.payloads)==2
+        assert registry._connection.execute("SELECT * FROM root_revisions").fetchall()==before
+        assert registry._connection.total_changes==total
+
+
 def test_approval_payload_never_contains_host_path(tmp_path: Path, root: Path) -> None:
     approver = Approver()
     with SQLiteRootRegistry((tmp_path/"roots.sqlite3").resolve(), verifier=approver) as registry:

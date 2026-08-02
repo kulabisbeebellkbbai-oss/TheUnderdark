@@ -91,7 +91,12 @@ class SQLiteRootRegistry:
         approval_payload = self._approval_payload(payload, info)
         digest, approval = self._approve("root.register", approval_payload)
         with self._transaction():
-            if self._head(project_id, root_id) is not None: raise RegistryFailure("ROOT_EXISTS", "root is already registered")
+            if self._head(project_id, root_id) is not None:
+                current = self._current(project_id, root_id)
+                expected = (project_id, root_id, policy_revision, str(root), alias, "active", max_bytes, info.st_dev, info.st_ino, digest)
+                actual = tuple(current[name] for name in ("project_id", "root_id", "policy_revision", "host_path", "alias", "status", "max_bytes", "device", "inode", "target_digest"))
+                if actual == expected: return
+                raise RegistryFailure("ROOT_EXISTS", "root is already registered")
             self._reject_overlap(root)
             self._insert(payload, info, approval.approval_id, digest)
 
