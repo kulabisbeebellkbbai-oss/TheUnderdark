@@ -51,6 +51,14 @@ def test_snapshot_is_stable_and_bound_to_namespace(tmp_path):
         with pytest.raises(CursorInvalid): pages.next_page(first.next_cursor,project_id="p",root_id="r",relative_path="dir",policy_revision="1",namespace_identity="inode:changed",limit=2)
 
 
+def test_snapshot_accepts_canonical_read_backend_metadata(tmp_path):
+    path=(tmp_path/"canonical-pages.sqlite3").resolve()
+    entry={"name":"payload.txt","type":"file","size":7,"modified_ns":123,"identity":"sha256:"+"a"*64}
+    with SQLiteSnapshotPaginator(path,cursor_key=b"m"*32) as pages:
+        first=pages.first_page(project_id="p",root_id="r",relative_path="",policy_revision="1",namespace_identity="sha256:"+"b"*64,entries=[entry],limit=1)
+    assert first.entries == (entry,)
+
+
 def test_state_databases_are_private_and_reject_symlinks(tmp_path):
     admission_path=(tmp_path/"private-admission.sqlite3").resolve()
     pages_path=(tmp_path/"private-pages.sqlite3").resolve()

@@ -71,7 +71,7 @@ class SQLiteSnapshotPaginator:
         if not 1<=limit<=self.max_page_size: raise ValueError("page limit is outside finite bounds")
     @staticmethod
     def _safe_entry(item):
-        allowed={"name","type","size","modified_at","digest"}
+        allowed={"name","type","size","modified_ns","identity"}
         if set(item)-allowed or not isinstance(item.get("name"),str) or "/" in str(item["name"]) or not item["name"]: raise ValueError("entry metadata is not display-safe")
         return dict(item)
 
