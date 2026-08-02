@@ -69,8 +69,28 @@ def test_register_root_composes_registry_before_backup_bindings(tmp_path,monkeyp
     private(cfg,json.dumps(value).encode())
     import theunderdark.production_cli as launcher
     from theunderdark.root_registry import ControlPlaneApproval
+    with launcher.build_runtime(cfg,compose_backup_bindings=False) as runtime:
+        digest=runtime.registry.registration_target_digest(project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1)
+    value["root_authorization_refs"]={digest:"auth"}; private(cfg,json.dumps(value).encode())
+    original=cfg.read_bytes(); identity=(cfg.stat().st_dev,cfg.stat().st_ino)
     monkeypatch.setattr(launcher.OverseerRootControlVerifier,"verify",lambda _self,action,payload,target:ControlPlaneApproval("approval",action,payload["project_id"],payload["root_id"],payload["policy_revision"],target,"approved","2099-01-01T00:00:00+00:00"))
-    digest=launcher.register_approved_root(cfg,project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1,authorization_ref="auth")
-    assert digest.startswith("sha256:")
+    result=launcher.register_approved_root(cfg,project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1,authorization_ref="auth")
+    assert result==digest and cfg.read_bytes()==original and (cfg.stat().st_dev,cfg.stat().st_ino)==identity
     with launcher.build_runtime(cfg) as runtime:
         assert runtime.registry.root_ids("project")== ("root",)
+
+@pytest.mark.parametrize(("references","authorization_ref","code"),[
+    ({},"auth","AUTHORIZATION_REQUIRED"),
+    ("mismatch","auth","AUTHORIZATION_MISMATCH"),
+])
+def test_register_root_requires_exact_prebound_authorization_without_rewriting_config(tmp_path,references,authorization_ref,code):
+    cfg,value=config(tmp_path); source=tmp_path/"source"; source.mkdir()
+    import theunderdark.production_cli as launcher
+    with launcher.build_runtime(cfg,compose_backup_bindings=False) as runtime:
+        digest=runtime.registry.registration_target_digest(project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1)
+    value["root_authorization_refs"]={} if references=={} else {digest:"other-auth"}; private(cfg,json.dumps(value).encode())
+    original=cfg.read_bytes(); identity=(cfg.stat().st_dev,cfg.stat().st_ino)
+    with pytest.raises(launcher.RootVerificationError) as failure:
+        launcher.register_approved_root(cfg,project_id="project",root_id="root",policy_revision="1",host_path=source,alias="workspace",max_bytes=1,authorization_ref=authorization_ref)
+    assert failure.value.code==code
+    assert cfg.read_bytes()==original and (cfg.stat().st_dev,cfg.stat().st_ino)==identity

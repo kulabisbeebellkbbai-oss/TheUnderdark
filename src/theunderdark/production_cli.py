@@ -102,9 +102,9 @@ def build_runtime(config_path:str|Path,*,compose_backup_bindings:bool=True)->Pro
     return ProductionRuntime(*resources,service=service,bind=bind,registry=registry,root_authorization_refs=references)
 
 def register_approved_root(config_path:str|Path,*,project_id:str,root_id:str,policy_revision:str,host_path:str|Path,alias:str,max_bytes:int,authorization_ref:str)->str:
-    """Register one exact root and durably bind its approved Overseer reference."""
+    """Register one exact root using its prebound Overseer authorization."""
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",authorization_ref) is None: raise ValueError("authorization_ref must be an opaque ID")
-    config_file=_private_file(Path(config_path),"config",exact_mode=0o600); original=config_file.read_bytes()
+    config_file=_private_file(Path(config_path),"config",exact_mode=0o600)
     # Root registration must compose the registry before resolving backup
     # bindings. Resolving the binding here would require the root that this
     # operation is responsible for registering, creating a circular startup
@@ -112,14 +112,10 @@ def register_approved_root(config_path:str|Path,*,project_id:str,root_id:str,pol
     with build_runtime(config_file,compose_backup_bindings=False) as runtime:
         arguments={"project_id":project_id,"root_id":root_id,"policy_revision":policy_revision,"host_path":host_path,"alias":alias,"max_bytes":max_bytes}
         digest=runtime.registry.registration_target_digest(**arguments)
-        config=json.loads(original); references=config["root_authorization_refs"]
-        if digest in references and references[digest]!=authorization_ref: raise ValueError("approval target is already bound to another authorization reference")
-        references[digest]=authorization_ref
-        _replace_private_json(config_file,config); runtime.root_authorization_refs[digest]=authorization_ref
-        try: runtime.registry.register(**arguments)
-        except Exception:
-            _replace_private_bytes(config_file,original); runtime.root_authorization_refs.pop(digest,None)
-            raise
+        prebound=runtime.root_authorization_refs.get(digest)
+        if prebound is None: raise RootVerificationError("AUTHORIZATION_REQUIRED","approval target is not prebound in the protected configuration")
+        if prebound!=authorization_ref: raise RootVerificationError("AUTHORIZATION_MISMATCH","approval target is prebound to another authorization reference")
+        runtime.registry.register(**arguments)
         return digest
 
 
@@ -165,15 +161,6 @@ def _private_directory(path:Path)->Path:
     status=path.lstat()
     if not stat.S_ISDIR(status.st_mode) or stat.S_ISLNK(status.st_mode) or (hasattr(os,"geteuid") and status.st_uid!=os.geteuid()) or stat.S_IMODE(status.st_mode)!=0o700: raise PermissionError("state directory must be owner-only")
     return path
-
-def _replace_private_json(path:Path,value:Mapping[str,object])->None:
-    _replace_private_bytes(path,json.dumps(value,sort_keys=True,separators=(",",":")).encode())
-def _replace_private_bytes(path:Path,value:bytes)->None:
-    fd,name=__import__("tempfile").mkstemp(prefix=".config-",dir=path.parent); temp=Path(name)
-    try:
-        with os.fdopen(fd,"wb") as output: output.write(value); output.flush(); os.fsync(output.fileno())
-        temp.chmod(0o600); os.replace(temp,path)
-    finally: temp.unlink(missing_ok=True)
 
 def _backup_bindings(value:object)->tuple[BackupBinding,...]:
     if not isinstance(value,list): raise ValueError("backup_bindings must be a list")
