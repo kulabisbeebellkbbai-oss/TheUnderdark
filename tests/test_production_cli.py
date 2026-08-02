@@ -48,3 +48,14 @@ def test_partial_construction_closes_prior_resources(tmp_path,monkeypatch):
     monkeypatch.setattr(launcher,"SQLiteOperationJournal",TrackedJournal); monkeypatch.setattr(launcher,"SQLiteAdmissionController",BrokenAdmission)
     with pytest.raises(RuntimeError,match="later dependency failed"): launcher.build_runtime(cfg)
     assert closed==["journal"]
+
+def test_register_root_failure_emits_only_redacted_stable_code(tmp_path,monkeypatch,capsys):
+    cfg,_=config(tmp_path)
+    import theunderdark.production_cli as launcher
+    def fail(*_args,**_kwargs): raise PermissionError("private /path token=must-not-leak")
+    monkeypatch.setattr(launcher,"register_approved_root",fail)
+    result=launcher.main(["register-root","--config",str(cfg),"--project-id","project","--root-id","root","--policy-revision","1","--host-path",str(tmp_path),"--alias","workspace","--max-bytes","1","--authorization-ref","auth"])
+    output=capsys.readouterr()
+    assert result==2 and output.out==""
+    assert json.loads(output.err)=={"ok":False,"error":{"code":"PRIVATE_STATE_INVALID"},"redactions_applied":True}
+    assert "path" not in output.err and "token" not in output.err and "Traceback" not in output.err

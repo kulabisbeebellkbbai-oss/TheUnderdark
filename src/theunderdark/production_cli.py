@@ -6,6 +6,7 @@ import json
 import os
 import re
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -19,8 +20,8 @@ from .overseer_verifier import OverseerAuthorizationVerifier
 from .pagination import SQLiteSnapshotPaginator
 from .production import ProductionStorageService
 from .read_backend import FsContainReadBackend
-from .root_registry import SQLiteRootRegistry
-from .root_verifier import OverseerRootControlVerifier
+from .root_registry import RegistryFailure,SQLiteRootRegistry
+from .root_verifier import OverseerRootControlVerifier,RootVerificationError
 
 
 class UrllibJSONTransport:
@@ -125,13 +126,29 @@ def main(argv:list[str]|None=None)->int:
     if args.command=="register-root":
         names=("project_id","root_id","policy_revision","host_path","alias","max_bytes","authorization_ref")
         if any(getattr(args,name) is None for name in names): parser.error("register-root requires exact root identity, path, limit, alias, and authorization reference")
-        register_approved_root(args.config,**{name:getattr(args,name) for name in names}); return 0
+        try:
+            register_approved_root(args.config,**{name:getattr(args,name) for name in names})
+        except Exception as error:
+            # Emit only a stable error class/code. Paths, tokens, HTTP bodies,
+            # tracebacks, and exception messages are intentionally excluded.
+            print(json.dumps({"ok":False,"error":{"code":_startup_error_code(error)},"redactions_applied":True},sort_keys=True),file=sys.stderr)
+            return 2
+        return 0
     with build_runtime(args.config) as runtime:
         if args.command=="check": return 0
         import uvicorn
         from .production_app import create_production_http_app
         uvicorn.run(create_production_http_app(runtime.service),host=runtime.bind.host,port=runtime.bind.port,log_config=None)
     return 0
+
+
+def _startup_error_code(error:Exception)->str:
+    if isinstance(error,(RegistryFailure,RootVerificationError)): return error.code
+    if isinstance(error,PermissionError): return "PRIVATE_STATE_INVALID"
+    if isinstance(error,KeyError): return "CONFIG_REFERENCE_MISSING"
+    if isinstance(error,ValueError): return "CONFIG_INVALID"
+    if isinstance(error,OSError): return "IO_UNAVAILABLE"
+    return "DEPENDENCY_UNAVAILABLE"
 
 
 def _private_file(path:Path,label:str,*,exact_mode:int)->Path:
