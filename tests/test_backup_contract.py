@@ -38,6 +38,7 @@ def test_fixture_is_canonical_and_backup_schemas_match_production_constants() ->
     assert contract.version == PROVISIONING_CONTRACT_VERSION == "1"
     assert FIXTURE.read_bytes() == canonical_contract_bytes(contract.raw)
     tools = contract.raw["mcp_tools"]
+    assert all(schema.get("type") == "object" for schema in tools.values())
     assert set(tools["underdark_backup_create"]["properties"]) == set(COMMON_FIELDS) | set(
         ACTION_FIELDS["backup.create"]
     )
@@ -137,4 +138,26 @@ def test_parser_rejects_noncanonical_bytes(tmp_path: Path) -> None:
     path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
 
     with pytest.raises(ValueError, match="canonical JSON"):
+        load_provisioning_contract(path)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda schema: schema.pop("type", None),
+        lambda schema: schema.__setitem__("type", "array"),
+        lambda schema: schema.__setitem__("$defs", {"helper": {"type": "string"}}),
+        lambda schema: schema.__setitem__("allOf", [{"minProperties": 1}]),
+        lambda schema: schema.__setitem__("minProperties", 1),
+    ],
+)
+def test_parser_rejects_missing_wrong_or_unreviewed_top_level_tool_schema_keywords(
+    tmp_path: Path, mutation
+) -> None:
+    raw = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    mutation(raw["mcp_tools"]["underdark_backup_create"])
+    path = tmp_path / "invalid-tool-schema.json"
+    path.write_bytes(canonical_contract_bytes(raw))
+
+    with pytest.raises(ValueError):
         load_provisioning_contract(path)

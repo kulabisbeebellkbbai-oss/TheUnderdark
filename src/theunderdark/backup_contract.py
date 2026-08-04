@@ -141,7 +141,9 @@ def _validate_root_registration(value: object) -> Mapping[str, object]:
 def _validate_mcp_tools(value: object) -> Mapping[str, object]:
     tools = _exact_fields(value, set(_TOOL_FIELDS), "mcp_tools")
     for name, required_fields in _TOOL_FIELDS.items():
-        schema = _exact_fields(tools[name], {"additionalProperties", "properties", "required"}, f"mcp_tools.{name}")
+        schema = _exact_fields(tools[name], {"additionalProperties", "properties", "required", "type"}, f"mcp_tools.{name}")
+        if schema["type"] != "object":
+            raise ValueError(f"mcp_tools.{name}.type must be object")
         if schema["additionalProperties"] is not False:
             raise ValueError(f"mcp_tools.{name} must reject additional properties")
         properties = _mapping(schema["properties"], f"mcp_tools.{name}.properties")

@@ -17,14 +17,22 @@ BACKUP_CONTRACT_FIXTURE = Path(__file__).parent / "fixtures/contracts/donuthole_
 
 
 def _contract_schema_view(schema: dict) -> dict:
-    return {
-        "additionalProperties": schema["additionalProperties"],
-        "properties": {
-            name: {key: value for key, value in definition.items() if key != "title"}
-            for name, definition in schema["properties"].items()
-        },
-        "required": set(schema["required"]),
-    }
+    return _normalize_schema_value(schema)
+
+
+def _normalize_schema_value(value):
+    if isinstance(value, dict):
+        normalized = {
+            name: _normalize_schema_value(child)
+            for name, child in value.items()
+            if name != "title"
+        }
+        if isinstance(normalized.get("required"), list):
+            normalized["required"] = sorted(normalized["required"])
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_schema_value(child) for child in value]
+    return value
 
 
 class Dependency:
@@ -116,16 +124,16 @@ def test_production_backup_tool_schemas_match_contract_and_production_constants(
         actual = _contract_schema_view(tools[tool_name].inputSchema)
         expected = contract.raw["mcp_tools"][tool_name]
         assert set(actual["properties"]) == set(COMMON_FIELDS) | set(ACTION_FIELDS[action])
-        assert actual["additionalProperties"] == expected["additionalProperties"]
-        assert actual["required"] == set(expected["required"])
-        assert actual["properties"] == expected["properties"]
+        assert actual == expected
     service.journal.close()
 
 
 def test_contract_schema_view_keeps_all_non_presentation_schema_details() -> None:
     schema = {
         "title": "Backup Create",
+        "type": "object",
         "additionalProperties": False,
+        "minProperties": 2,
         "properties": {
             "retention_count": {
                 "title": "Retention Count",
@@ -136,13 +144,19 @@ def test_contract_schema_view_keeps_all_non_presentation_schema_details() -> Non
             "profile": {"title": "Profile", "type": "string", "enum": ["expected"]},
         },
         "required": ["profile", "retention_count"],
+        "$defs": {"digest": {"title": "Digest", "type": "string", "pattern": "^sha256:"}},
+        "allOf": [{"title": "Tighten", "minProperties": 2}],
     }
 
     assert _contract_schema_view(schema) == {
+        "type": "object",
         "additionalProperties": False,
+        "minProperties": 2,
         "properties": {
             "retention_count": {"type": "integer", "minimum": 3, "default": 3},
             "profile": {"type": "string", "enum": ["expected"]},
         },
-        "required": {"profile", "retention_count"},
+        "required": ["profile", "retention_count"],
+        "$defs": {"digest": {"type": "string", "pattern": "^sha256:"}},
+        "allOf": [{"minProperties": 2}],
     }
