@@ -142,12 +142,14 @@ def test_backup_actions_use_exact_overseer_payload_and_preserve_host_state(tmp_p
     create={**common(1),"source_root_id":"work","retention_count":3,"encryption_profile":"gpg-symmetric-aes256-iterated-s2k"}
     first=service.backup_create(**create)
     assert first["ok"] and first["evidence"]["host_state_changed"] is True and first["evidence"]["redactions_applied"] is True
+    assert first["request_digest"]==_request_digest("backup.create",create)
     assert verifier.requests[-1][2]==_request_digest("backup.create",create)
     reused=service.backup_create(**{**common(2),**{key:create[key] for key in ("source_root_id","retention_count","encryption_profile")}})
     assert reused["ok"] and reused["evidence"]["host_state_changed"] is False
     verify={**common(3),"artifact_id":first["result"]["artifact_id"],"expected_artifact_digest":first["result"]["artifact_digest"],"expected_manifest_digest":first["result"]["manifest_digest"]}
     before={path.name for path in artifacts.glob("backup-*.tar.gpg")}; checked=service.backup_verify_restore(**verify)
     assert checked["ok"] and checked["evidence"]["host_state_changed"] is False
+    assert checked["request_digest"]==_request_digest("backup.verify_restore",verify)
     assert {path.name for path in artifacts.glob("backup-*.tar.gpg")}==before
     journal.close()
 

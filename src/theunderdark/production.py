@@ -236,7 +236,7 @@ class ProductionStorageService:
 
     def _envelope(self, operation: JournalOperation) -> dict[str, Any]:
         evidence = [str(row["evidence_id"]) for row in self.journal.transitions(operation.operation_id)]
-        base = {"contract_version": CONTRACT_VERSION, "request_id": operation.request_id, "operation_id": operation.operation_id, "evidence": {"evidence_ids": evidence, "host_state_changed": operation.host_state_changed, "redactions_applied": operation.action.startswith("backup.")}}
+        base = {"contract_version": CONTRACT_VERSION, "request_id": operation.request_id, "request_digest": operation.request_digest, "operation_id": operation.operation_id, "evidence": {"evidence_ids": evidence, "host_state_changed": operation.host_state_changed, "redactions_applied": operation.action.startswith("backup.")}}
         if operation.state in {OperationState.FAILED, OperationState.INDETERMINATE, OperationState.CANCELLED}:
             return {"ok": False, **base, "error": {"code": operation.error_code or "EXECUTION_FAILED", "message": "The durable operation did not reach verified success.", "retryable": False, "details": {}}, "result": {"state": operation.state.value}}
         return {"ok": True, **base, "result": {"state": operation.state.value, **dict(operation.result or {})}}
