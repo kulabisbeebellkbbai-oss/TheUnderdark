@@ -128,6 +128,58 @@ def test_production_backup_tool_schemas_match_contract_and_production_constants(
     service.journal.close()
 
 
+def test_production_backup_handlers_forward_only_declared_contract_fields(tmp_path) -> None:
+    service = injected_service(tmp_path)
+    captured: dict[str, dict[str, object]] = {}
+
+    def capture_create(**payload: object) -> dict[str, object]:
+        captured["create"] = dict(payload)
+        return {"ok": True}
+
+    def capture_verify_restore(**payload: object) -> dict[str, object]:
+        captured["verify_restore"] = dict(payload)
+        return {"ok": True}
+
+    service.backup_create = capture_create
+    service.backup_verify_restore = capture_verify_restore
+    create = {
+        "project_id": "project.donuthole",
+        "root_id": "backup-root",
+        "request_id": "request.backup-create",
+        "idempotency_key": "backup-create",
+        "authorization_ref": "root-auth.backup-root",
+        "policy_revision": "1",
+        "reason": "disposable backup acceptance",
+        "source_root_id": "backup-root",
+        "retention_count": 3,
+        "encryption_profile": "gpg-symmetric-aes256-iterated-s2k",
+    }
+    verify_restore = {
+        "project_id": "project.donuthole",
+        "root_id": "backup-root",
+        "request_id": "request.backup-verify",
+        "idempotency_key": "backup-verify",
+        "authorization_ref": "root-auth.backup-root",
+        "policy_revision": "1",
+        "reason": "disposable restore acceptance",
+        "artifact_id": "backup-fixture",
+        "expected_artifact_digest": "sha256:" + "a" * 64,
+        "expected_manifest_digest": "sha256:" + "b" * 64,
+    }
+
+    async def invoke() -> None:
+        async with create_connected_server_and_client_session(create_production_mcp(service)) as client:
+            await client.call_tool("underdark_backup_create", create)
+            await client.call_tool("underdark_backup_verify_restore", verify_restore)
+
+    asyncio.run(invoke())
+    assert captured["create"] == create
+    assert captured["verify_restore"] == verify_restore
+    assert "service" not in captured["create"]
+    assert "service" not in captured["verify_restore"]
+    service.journal.close()
+
+
 def test_contract_schema_view_keeps_all_non_presentation_schema_details() -> None:
     schema = {
         "title": "Backup Create",

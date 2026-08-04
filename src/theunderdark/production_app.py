@@ -106,11 +106,33 @@ def create_production_mcp(service: ProductionStorageService) -> FastMCP:
 
     @mcp.tool(name="underdark_backup_create")
     def backup_create(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, source_root_id: str, retention_count: int, encryption_profile: str) -> dict[str, Any]:
-        return service.backup_create(**locals())
+        return service.backup_create(
+            project_id=project_id,
+            root_id=root_id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            authorization_ref=authorization_ref,
+            policy_revision=policy_revision,
+            reason=reason,
+            source_root_id=source_root_id,
+            retention_count=retention_count,
+            encryption_profile=encryption_profile,
+        )
 
     @mcp.tool(name="underdark_backup_verify_restore")
     def backup_verify_restore(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, artifact_id: str, expected_artifact_digest: str, expected_manifest_digest: str) -> dict[str, Any]:
-        return service.backup_verify_restore(**locals())
+        return service.backup_verify_restore(
+            project_id=project_id,
+            root_id=root_id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            authorization_ref=authorization_ref,
+            policy_revision=policy_revision,
+            reason=reason,
+            artifact_id=artifact_id,
+            expected_artifact_digest=expected_artifact_digest,
+            expected_manifest_digest=expected_manifest_digest,
+        )
 
     _strict(mcp)
     return mcp
