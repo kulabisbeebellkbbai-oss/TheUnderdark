@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import httpx
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from theunderdark.backup_contract import load_provisioning_contract
 from theunderdark.journal import SQLiteOperationJournal
-from theunderdark.production import ProductionStorageService
+from theunderdark.production import ACTION_FIELDS, COMMON_FIELDS, ProductionStorageService
 from theunderdark.production_app import LoopbackBindConfig, create_production_http_app, create_production_mcp
+
+
+BACKUP_CONTRACT_FIXTURE = Path(__file__).parent / "fixtures/contracts/donuthole_backup_provisioning_v1.json"
 
 
 class Dependency:
@@ -82,4 +87,26 @@ def test_production_mcp_has_strict_bounded_inventory(tmp_path) -> None:
     }
     assert all(tool.inputSchema.get("additionalProperties") is False for tool in tools)
     assert invalid.isError is True
+    service.journal.close()
+
+
+def test_production_backup_tool_schemas_match_contract_and_production_constants(tmp_path) -> None:
+    service = injected_service(tmp_path)
+    contract = load_provisioning_contract(BACKUP_CONTRACT_FIXTURE)
+
+    async def list_tools():
+        return {tool.name: tool for tool in await create_production_mcp(service).list_tools()}
+
+    tools = asyncio.run(list_tools())
+    for tool_name, action in (
+        ("underdark_backup_create", "backup.create"),
+        ("underdark_backup_verify_restore", "backup.verify_restore"),
+    ):
+        assert set(tools[tool_name].inputSchema["properties"]) == set(COMMON_FIELDS) | set(
+            ACTION_FIELDS[action]
+        )
+        assert {
+            name: {"type": definition["type"]}
+            for name, definition in tools[tool_name].inputSchema["properties"].items()
+        } == contract.raw["mcp_tools"][tool_name]["properties"]
     service.journal.close()
