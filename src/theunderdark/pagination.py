@@ -21,6 +21,8 @@ class CursorInvalid(ValueError): pass
 class Page:
     entries: tuple[Mapping[str,object],...]
     next_cursor: str|None
+    snapshot_id: str
+    total_count: int
 
 
 class SQLiteSnapshotPaginator:
@@ -66,7 +68,7 @@ class SQLiteSnapshotPaginator:
             token={"s":snapshot_id,"c":context,"o":offset+limit}
             token["m"]=hmac.new(self._cursor_key,json.dumps(token,sort_keys=True,separators=(",",":")).encode(),hashlib.sha256).hexdigest()
             next_cursor=base64.urlsafe_b64encode(json.dumps(token,separators=(",",":")).encode()).decode().rstrip("=")
-        return Page(tuple(page),next_cursor)
+        return Page(tuple(page),next_cursor,snapshot_id,len(entries))
     def _limit(self,limit):
         if not 1<=limit<=self.max_page_size: raise ValueError("page limit is outside finite bounds")
     @staticmethod

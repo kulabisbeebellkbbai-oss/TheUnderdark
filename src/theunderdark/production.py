@@ -94,7 +94,12 @@ class ProductionStorageService:
             else:
                 identity, _ = self.read_backend.directory_snapshot(project_id, root_id, relative_path)
                 page = self.paginator.next_page(cursor, project_id=project_id, root_id=root_id, relative_path=relative_path, policy_revision=policy_revision, namespace_identity=identity, limit=limit)
-            return self._read_success(request_id, {"entries": list(page.entries), "next_cursor": page.next_cursor})
+            return self._read_success(request_id, {
+                "entries": list(page.entries),
+                "next_cursor": page.next_cursor,
+                "snapshot_identity": page.snapshot_id,
+                "total_count": page.total_count,
+            })
         except CursorInvalid:
             return self._failure(request_id, "INVALID_ARGUMENT", "The cursor is invalid for the current namespace.")
         except ProductionFailure as error: return self._failure(request_id, error.code, error.message)

@@ -1,10 +1,106 @@
 from datetime import UTC, datetime, timedelta
+import hashlib
+import json
+import os
+from pathlib import Path
 
+from theunderdark.admission import AdmissionLimits, SQLiteAdmissionController
 from theunderdark.backup_executor import EncryptedBackupExecutor
+from theunderdark.composition import compose_production_runtime
 from theunderdark.journal import AuthorizationSnapshot, SQLiteOperationJournal
+from theunderdark.pagination import SQLiteSnapshotPaginator
 from theunderdark.production import ProductionStorageService, _request_digest
 from theunderdark.composition import BackupBinding, build_backup_executor_provider
 from theunderdark.mutation_executor import ResolvedRoot
+from theunderdark.root_registry import ControlPlaneApproval, SQLiteRootRegistry
+
+
+class _DisposableRootVerifier:
+    """Deterministic approval transport for disposable component composition."""
+
+    def verify(self, action, payload, target_digest):
+        return ControlPlaneApproval(
+            "disposable-root-approval",
+            action,
+            str(payload["project_id"]),
+            str(payload["root_id"]),
+            str(payload["policy_revision"]),
+            target_digest,
+            "approved",
+            "2099-01-01T00:00:00+00:00",
+        )
+
+
+class _DisposableAuthorizationVerifier:
+    """Deterministic transport fixture; mutation authorization is never exercised here."""
+
+    def verify(self, action, request, request_digest):
+        return AuthorizationSnapshot(
+            str(request["authorization_ref"]),
+            str(request["request_id"]),
+            str(request["project_id"]),
+            str(request["root_id"]),
+            action,
+            request_digest,
+            str(request["policy_revision"]),
+            "disposable-claim",
+            "disposable-approval",
+            "2099-01-01T00:00:00+00:00",
+            "2099-01-01T00:05:00+00:00",
+            {"max_bytes": 1_048_576, "max_items": 16},
+        )
+
+
+def build_real_service(workspace: Path, authority_path: Path) -> ProductionStorageService:
+    """Compose the real read-path components from a sealed disposable authority file.
+
+    This is test support only.  It never opens a listener, calls a live
+    authority provider, or configures backup/restore execution.
+    """
+
+    workspace = workspace.resolve()
+    supplied_authority = Path(authority_path)
+    if supplied_authority.is_symlink():
+        raise ValueError("disposable authority must be a sealed regular file")
+    authority_path = supplied_authority.resolve(strict=True)
+    if not authority_path.is_file() or os.stat(authority_path).st_mode & 0o222:
+        raise ValueError("disposable authority must be a sealed regular file")
+    raw_bytes = authority_path.read_bytes()
+    try:
+        authority = json.loads(raw_bytes)
+    except json.JSONDecodeError as error:
+        raise ValueError("disposable authority must be JSON") from error
+    required = {"project_id", "root_id", "policy_revision", "alias", "max_bytes", "root_path"}
+    if not isinstance(authority, dict) or set(authority) != required:
+        raise ValueError("disposable authority fields are invalid")
+    root_path = Path(str(authority["root_path"])).resolve(strict=True)
+    workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+    state = workspace / "state"
+    state.mkdir(mode=0o700, exist_ok=True)
+    registry = SQLiteRootRegistry((state / "roots.sqlite3").resolve(), verifier=_DisposableRootVerifier())
+    registry.register(
+        project_id=str(authority["project_id"]),
+        root_id=str(authority["root_id"]),
+        policy_revision=str(authority["policy_revision"]),
+        host_path=root_path,
+        alias=str(authority["alias"]),
+        max_bytes=int(authority["max_bytes"]),
+    )
+    composition = compose_production_runtime(
+        registry=registry,
+        journal=SQLiteOperationJournal((state / "journal.sqlite3").resolve()),
+        admission=SQLiteAdmissionController((state / "admission.sqlite3").resolve()),
+        paginator=SQLiteSnapshotPaginator(
+            (state / "pagination.sqlite3").resolve(),
+            cursor_key=hashlib.sha256(raw_bytes).digest(),
+            max_page_size=2,
+        ),
+        verifier=_DisposableAuthorizationVerifier(),
+        limits_provider=lambda _project_id: AdmissionLimits(1_048_576, 4, 16, 60, 60),
+    )
+    if authority_path.read_bytes() != raw_bytes:
+        raise AssertionError("disposable authority changed during composition")
+    return composition.service
 
 
 class Verifier:

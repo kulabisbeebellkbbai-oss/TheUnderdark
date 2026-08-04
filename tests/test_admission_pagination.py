@@ -47,6 +47,8 @@ def test_snapshot_is_stable_and_bound_to_namespace(tmp_path):
         assert [e["name"] for e in first.entries]==["b","c"]
         second=pages.next_page(first.next_cursor,project_id="p",root_id="r",relative_path="dir",policy_revision="1",namespace_identity="inode:1",limit=2)
         assert [e["name"] for e in second.entries]==["d"]
+        assert first.snapshot_id == second.snapshot_id
+        assert first.total_count == second.total_count == 3
         with pytest.raises(CursorInvalid): pages.next_page(first.next_cursor,project_id="p",root_id="r",relative_path="dir",policy_revision="2",namespace_identity="inode:1",limit=2)
         with pytest.raises(CursorInvalid): pages.next_page(first.next_cursor,project_id="p",root_id="r",relative_path="dir",policy_revision="1",namespace_identity="inode:changed",limit=2)
 
