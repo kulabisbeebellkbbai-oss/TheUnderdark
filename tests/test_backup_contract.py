@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -52,3 +53,88 @@ def test_fixture_bytes_match_explicit_overseer_fixture() -> None:
     assert hashlib.sha256(FIXTURE.read_bytes()).digest() == hashlib.sha256(
         overseer_fixture.read_bytes()
     ).digest()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda raw: raw["acceptance_requests"]["backup_create"]["parameters"].__setitem__(
+                "retention_count", True
+            ),
+            "retention_count",
+        ),
+        (
+            lambda raw: raw["acceptance_requests"]["backup_create"]["parameters"].__setitem__(
+                "policy_revision", "2"
+            ),
+            "backup_create policy revision does not match root registration",
+        ),
+        (
+            lambda raw: raw["acceptance_requests"]["backup_verify_restore"]["parameters"].__setitem__(
+                "policy_revision", "2"
+            ),
+            "backup_verify_restore policy revision does not match root registration",
+        ),
+        (
+            lambda raw: raw["acceptance_requests"]["backup_create"]["parameters"].__setitem__(
+                "source_root_id", "different-root"
+            ),
+            "backup_create source root does not match root registration",
+        ),
+        (
+            lambda raw: (
+                raw["runtime_identity"].__setitem__(
+                    "previous_identity", raw["runtime_identity"]["planned_identity"]
+                ),
+                raw["scenarios"][1].__setitem__(
+                    "previous_runtime_identity", raw["runtime_identity"]["planned_identity"]
+                ),
+            ),
+            "previous identity must differ",
+        ),
+        (
+            lambda raw: raw["acceptance_requests"]["root_list"].__setitem__("page_size", 2.0),
+            "invalid acceptance_requests.root_list",
+        ),
+        (
+            lambda raw: raw["acceptance_requests"]["nested_list"].__setitem__("page_size", 2.0),
+            "invalid acceptance_requests.nested_list",
+        ),
+        (
+            lambda raw: raw["acceptance_requests"]["backup_create"]["parameters"].__setitem__(
+                "retention_count", 3.0
+            ),
+            "retention_count",
+        ),
+        (
+            lambda raw: raw["acceptance_requests"]["backup_create"]["parameters"].__setitem__(
+                "encryption_profile", "unapproved-profile"
+            ),
+            "encryption profile must match BACKUP_ENCRYPTION_PROFILE",
+        ),
+        (
+            lambda raw: raw["acceptance_requests"]["backup_verify_restore"]["parameters"].__setitem__(
+                "artifact_id", "artifact-contract-v1"
+            ),
+            "artifact_id must start with backup-",
+        ),
+    ],
+)
+def test_parser_rejects_every_task_1_contract_mutation(tmp_path: Path, mutation, message: str) -> None:
+    raw = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    mutation(raw)
+    path = tmp_path / "invalid-contract.json"
+    path.write_bytes(canonical_contract_bytes(raw))
+
+    with pytest.raises(ValueError, match=message):
+        load_provisioning_contract(path)
+
+
+def test_parser_rejects_noncanonical_bytes(tmp_path: Path) -> None:
+    raw = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    path = tmp_path / "noncanonical-contract.json"
+    path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical JSON"):
+        load_provisioning_contract(path)

@@ -207,7 +207,7 @@ def _validate_tool_parameters(value: object, tool_name: str, label: str) -> None
                 raise ValueError(f"{label}.retention_count must be integer 3")
         elif name == "encryption_profile":
             if parameter != _BACKUP_ENCRYPTION_PROFILE:
-                raise ValueError(f"{label}.encryption profile must match production backup profile")
+                raise ValueError(f"{label}.encryption profile must match BACKUP_ENCRYPTION_PROFILE")
         elif name == "artifact_id":
             artifact_id = _string(parameter, f"{label}.artifact_id")
             if not artifact_id.startswith("backup-"):

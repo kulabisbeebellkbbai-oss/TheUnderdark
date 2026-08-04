@@ -16,6 +16,17 @@ from theunderdark.production_app import LoopbackBindConfig, create_production_ht
 BACKUP_CONTRACT_FIXTURE = Path(__file__).parent / "fixtures/contracts/donuthole_backup_provisioning_v1.json"
 
 
+def _contract_schema_view(schema: dict) -> dict:
+    return {
+        "additionalProperties": schema["additionalProperties"],
+        "properties": {
+            name: {key: value for key, value in definition.items() if key != "title"}
+            for name, definition in schema["properties"].items()
+        },
+        "required": set(schema["required"]),
+    }
+
+
 class Dependency:
     pass
 
@@ -102,11 +113,36 @@ def test_production_backup_tool_schemas_match_contract_and_production_constants(
         ("underdark_backup_create", "backup.create"),
         ("underdark_backup_verify_restore", "backup.verify_restore"),
     ):
-        assert set(tools[tool_name].inputSchema["properties"]) == set(COMMON_FIELDS) | set(
-            ACTION_FIELDS[action]
-        )
-        assert {
-            name: {"type": definition["type"]}
-            for name, definition in tools[tool_name].inputSchema["properties"].items()
-        } == contract.raw["mcp_tools"][tool_name]["properties"]
+        actual = _contract_schema_view(tools[tool_name].inputSchema)
+        expected = contract.raw["mcp_tools"][tool_name]
+        assert set(actual["properties"]) == set(COMMON_FIELDS) | set(ACTION_FIELDS[action])
+        assert actual["additionalProperties"] == expected["additionalProperties"]
+        assert actual["required"] == set(expected["required"])
+        assert actual["properties"] == expected["properties"]
     service.journal.close()
+
+
+def test_contract_schema_view_keeps_all_non_presentation_schema_details() -> None:
+    schema = {
+        "title": "Backup Create",
+        "additionalProperties": False,
+        "properties": {
+            "retention_count": {
+                "title": "Retention Count",
+                "type": "integer",
+                "minimum": 3,
+                "default": 3,
+            },
+            "profile": {"title": "Profile", "type": "string", "enum": ["expected"]},
+        },
+        "required": ["profile", "retention_count"],
+    }
+
+    assert _contract_schema_view(schema) == {
+        "additionalProperties": False,
+        "properties": {
+            "retention_count": {"type": "integer", "minimum": 3, "default": 3},
+            "profile": {"type": "string", "enum": ["expected"]},
+        },
+        "required": {"profile", "retention_count"},
+    }
