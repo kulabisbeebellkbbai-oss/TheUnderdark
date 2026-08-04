@@ -12,6 +12,7 @@ from theunderdark.pagination import SQLiteSnapshotPaginator
 from theunderdark.production import ProductionStorageService, _request_digest
 from theunderdark.composition import BackupBinding, build_backup_executor_provider
 from theunderdark.mutation_executor import ResolvedRoot
+from theunderdark.overseer_verifier import OverseerAuthorizationVerifier
 from theunderdark.root_registry import ControlPlaneApproval, SQLiteRootRegistry
 
 
@@ -31,24 +32,35 @@ class _DisposableRootVerifier:
         )
 
 
-class _DisposableAuthorizationVerifier:
-    """Deterministic transport fixture; mutation authorization is never exercised here."""
+class _ReadOnlyVerificationTransport:
+    """The read-only acceptance path must never contact its verifier transport."""
 
-    def verify(self, action, request, request_digest):
-        return AuthorizationSnapshot(
-            str(request["authorization_ref"]),
-            str(request["request_id"]),
-            str(request["project_id"]),
-            str(request["root_id"]),
-            action,
-            request_digest,
-            str(request["policy_revision"]),
-            "disposable-claim",
-            "disposable-approval",
-            "2099-01-01T00:00:00+00:00",
-            "2099-01-01T00:05:00+00:00",
-            {"max_bytes": 1_048_576, "max_items": 16},
-        )
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def post(self, *_args, **_kwargs):
+        self.calls += 1
+        raise AssertionError("Task 4 read-only composition must not verify a mutation")
+
+
+def test_disposable_read_composition_uses_real_overseer_verifier(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    authority = tmp_path / "authority.json"
+    authority.write_text(json.dumps({
+        "project_id": "project.donuthole",
+        "root_id": "backup-root",
+        "policy_revision": "1",
+        "alias": "donuthole-source",
+        "max_bytes": 1024,
+        "root_path": str(root),
+    }, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    authority.chmod(0o400)
+
+    service = build_real_service(tmp_path, authority)
+
+    assert isinstance(service.verifier, OverseerAuthorizationVerifier)
+    assert service.verifier._http_client.calls == 0
 
 
 def build_real_service(workspace: Path, authority_path: Path) -> ProductionStorageService:
@@ -86,6 +98,11 @@ def build_real_service(workspace: Path, authority_path: Path) -> ProductionStora
         alias=str(authority["alias"]),
         max_bytes=int(authority["max_bytes"]),
     )
+    verifier = OverseerAuthorizationVerifier(
+        endpoint="http://127.0.0.1:8766/storage/authorizations/verify",
+        token_provider=lambda: "disposable-read-only-token",
+        http_client=_ReadOnlyVerificationTransport(),
+    )
     composition = compose_production_runtime(
         registry=registry,
         journal=SQLiteOperationJournal((state / "journal.sqlite3").resolve()),
@@ -95,7 +112,7 @@ def build_real_service(workspace: Path, authority_path: Path) -> ProductionStora
             cursor_key=hashlib.sha256(raw_bytes).digest(),
             max_page_size=2,
         ),
-        verifier=_DisposableAuthorizationVerifier(),
+        verifier=verifier,
         limits_provider=lambda _project_id: AdmissionLimits(1_048_576, 4, 16, 60, 60),
     )
     if authority_path.read_bytes() != raw_bytes:
