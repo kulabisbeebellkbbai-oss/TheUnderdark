@@ -46,14 +46,39 @@ def canonical_contract_bytes(contract: Mapping[str, object]) -> bytes:
     return (json.dumps(contract, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def runtime_artifact_identity(commit: str, schemas: Mapping[str, object]) -> str:
-    """Bind a planned runtime identity to its immutable revision and tool schemas."""
+def runtime_artifact_bytes(commit: str, schemas: Mapping[str, object]) -> bytes:
+    """Return the canonical immutable bytes for the planned runtime artifact."""
     if not isinstance(commit, str) or _COMMIT.fullmatch(commit) is None:
         raise ValueError("runtime commit must be a 40-character lowercase hexadecimal revision")
     if not isinstance(schemas, Mapping):
         raise ValueError("runtime schemas must be a mapping")
     payload = {"commit": commit, "schemas": schemas, "version": PROVISIONING_CONTRACT_VERSION}
-    return "sha256:" + hashlib.sha256(canonical_contract_bytes(payload)).hexdigest()
+    return canonical_contract_bytes(payload)
+
+
+def previous_runtime_artifact_bytes(commit: str, schemas: Mapping[str, object]) -> bytes:
+    """Return canonical immutable bytes for the known previous runtime artifact."""
+    if not isinstance(commit, str) or _COMMIT.fullmatch(commit) is None:
+        raise ValueError("runtime commit must be a 40-character lowercase hexadecimal revision")
+    if not isinstance(schemas, Mapping):
+        raise ValueError("runtime schemas must be a mapping")
+    payload = {
+        "commit": commit,
+        "runtime_state": "previous",
+        "schemas": schemas,
+        "version": PROVISIONING_CONTRACT_VERSION,
+    }
+    return canonical_contract_bytes(payload)
+
+
+def runtime_artifact_identity(commit: str, schemas: Mapping[str, object]) -> str:
+    """Bind the planned runtime identity to the SHA-256 of its immutable bytes."""
+    return "sha256:" + hashlib.sha256(runtime_artifact_bytes(commit, schemas)).hexdigest()
+
+
+def previous_runtime_artifact_identity(commit: str, schemas: Mapping[str, object]) -> str:
+    """Bind the previous runtime identity to the SHA-256 of its immutable bytes."""
+    return "sha256:" + hashlib.sha256(previous_runtime_artifact_bytes(commit, schemas)).hexdigest()
 
 
 def load_provisioning_contract(path: Path) -> ProvisioningContract:
@@ -170,6 +195,8 @@ def _validate_runtime_identity(value: object, schemas: Mapping[str, object]) -> 
         raise ValueError("runtime_identity.planned_identity does not match commit and schemas")
     if mapping["previous_identity"] == mapping["planned_identity"]:
         raise ValueError("runtime_identity previous identity must differ from planned identity")
+    if mapping["previous_identity"] != previous_runtime_artifact_identity(commit, schemas):
+        raise ValueError("runtime_identity.previous_identity does not match commit and schemas")
     return mapping
 
 

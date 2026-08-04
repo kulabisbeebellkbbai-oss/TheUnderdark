@@ -11,6 +11,10 @@ from theunderdark.backup_contract import (
     PROVISIONING_CONTRACT_VERSION,
     canonical_contract_bytes,
     load_provisioning_contract,
+    previous_runtime_artifact_bytes,
+    previous_runtime_artifact_identity,
+    runtime_artifact_bytes,
+    runtime_artifact_identity,
 )
 from theunderdark.production import ACTION_FIELDS, COMMON_FIELDS
 
@@ -54,6 +58,19 @@ def test_fixture_bytes_match_explicit_overseer_fixture() -> None:
     assert hashlib.sha256(FIXTURE.read_bytes()).digest() == hashlib.sha256(
         overseer_fixture.read_bytes()
     ).digest()
+
+
+def test_runtime_artifact_identities_are_the_sha256_of_their_canonical_bytes() -> None:
+    contract = load_provisioning_contract(FIXTURE)
+    commit = contract.raw["runtime_identity"]["commit"]
+    schemas = contract.raw["mcp_tools"]
+
+    assert runtime_artifact_identity(commit, schemas) == "sha256:" + hashlib.sha256(
+        runtime_artifact_bytes(commit, schemas)
+    ).hexdigest()
+    assert previous_runtime_artifact_identity(commit, schemas) == "sha256:" + hashlib.sha256(
+        previous_runtime_artifact_bytes(commit, schemas)
+    ).hexdigest()
 
 
 @pytest.mark.parametrize(
