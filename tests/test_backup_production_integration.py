@@ -14,6 +14,10 @@ from theunderdark.composition import BackupBinding, build_backup_executor_provid
 from theunderdark.mutation_executor import ResolvedRoot
 from theunderdark.overseer_verifier import OverseerAuthorizationVerifier
 from theunderdark.root_registry import ControlPlaneApproval, SQLiteRootRegistry
+from theunderdark.runtime_identity import RuntimeIdentity
+
+
+IDENTITY = RuntimeIdentity("sha256:" + "a" * 64, "sha256:" + "b" * 64, "sha256:" + "c" * 64)
 
 
 class _DisposableRootVerifier:
@@ -98,6 +102,13 @@ def build_real_service(workspace: Path, authority_path: Path) -> ProductionStora
         alias=str(authority["alias"]),
         max_bytes=int(authority["max_bytes"]),
     )
+    journal = SQLiteOperationJournal((state / "journal.sqlite3").resolve())
+    admission = SQLiteAdmissionController((state / "admission.sqlite3").resolve())
+    paginator = SQLiteSnapshotPaginator(
+        (state / "pagination.sqlite3").resolve(),
+        cursor_key=hashlib.sha256(raw_bytes).digest(),
+        max_page_size=2,
+    )
     verifier = OverseerAuthorizationVerifier(
         endpoint="http://127.0.0.1:8766/storage/authorizations/verify",
         token_provider=lambda: "disposable-read-only-token",
@@ -105,18 +116,19 @@ def build_real_service(workspace: Path, authority_path: Path) -> ProductionStora
     )
     composition = compose_production_runtime(
         registry=registry,
-        journal=SQLiteOperationJournal((state / "journal.sqlite3").resolve()),
-        admission=SQLiteAdmissionController((state / "admission.sqlite3").resolve()),
-        paginator=SQLiteSnapshotPaginator(
-            (state / "pagination.sqlite3").resolve(),
-            cursor_key=hashlib.sha256(raw_bytes).digest(),
-            max_page_size=2,
-        ),
+        journal=journal,
+        admission=admission,
+        paginator=paginator,
         verifier=verifier,
         limits_provider=lambda _project_id: AdmissionLimits(1_048_576, 4, 16, 60, 60),
+        runtime_identity=IDENTITY,
     )
     if authority_path.read_bytes() != raw_bytes:
         raise AssertionError("disposable authority changed during composition")
+    registry.close()
+    journal.close()
+    admission.close()
+    paginator.close()
     return composition.service
 
 

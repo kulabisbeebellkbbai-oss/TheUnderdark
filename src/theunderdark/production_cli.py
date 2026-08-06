@@ -22,6 +22,7 @@ from .production import ProductionStorageService
 from .read_backend import FsContainReadBackend
 from .root_registry import RegistryFailure,SQLiteRootRegistry
 from .root_verifier import OverseerRootControlVerifier,RootVerificationError
+from .runtime_identity import RuntimeIdentity, RuntimeIdentityError, validate_production_runtime_root
 
 
 class UrllibJSONTransport:
@@ -51,8 +52,9 @@ class ProductionRuntime:
     def __exit__(self,*_): self.close()
 
 
-def build_runtime(config_path:str|Path,*,compose_backup_bindings:bool=True)->ProductionRuntime:
-    config_file=_private_file(Path(config_path),"config",exact_mode=0o600); config=json.loads(config_file.read_text())
+def build_runtime(config_path:str|Path,*,compose_backup_bindings:bool=True,config_bytes:bytes|None=None)->ProductionRuntime:
+    config_file=_private_file(Path(config_path),"config",exact_mode=0o600)
+    config=json.loads(config_bytes if config_bytes is not None else config_file.read_bytes())
     required={"host","port","state_dir","journal_path","admission_path","pagination_path","registry_path","overseer_authorization_endpoint","overseer_root_endpoint","overseer_token_file","cursor_key_file","root_authorization_refs","limits","backup_bindings"}
     if set(config)!=required: raise ValueError("production config must contain the exact supported fields")
     bind=_Bind(str(config["host"]),int(config["port"])); state_dir=_private_directory(Path(str(config["state_dir"])))
@@ -68,7 +70,7 @@ def build_runtime(config_path:str|Path,*,compose_backup_bindings:bool=True)->Pro
         return current
     # Check readiness now rather than deferring an empty credential failure to
     # the first live authorization request. Do not retain the returned value.
-    initial_token=token_provider(); initial_token=""
+    token_provider()
     references=config["root_authorization_refs"]
     if not isinstance(references,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not v for k,v in references.items()): raise ValueError("root authorization reference map is invalid")
     root_verifier=OverseerRootControlVerifier(endpoint=str(config["overseer_root_endpoint"]),token_provider=token_provider,authorization_ref_provider=lambda _a,_p,d: references[d],http_client=transport)
@@ -121,8 +123,11 @@ def register_approved_root(config_path:str|Path,*,project_id:str,root_id:str,pol
 
 def main(argv:list[str]|None=None)->int:
     parser=argparse.ArgumentParser(prog="theunderdark-production"); parser.add_argument("command",choices=("check","serve","register-root")); parser.add_argument("--config",required=True)
+    parser.add_argument("--runtime-root"); parser.add_argument("--expected-runtime-digest"); parser.add_argument("--expected-config-digest"); parser.add_argument("--source-commit")
     parser.add_argument("--project-id"); parser.add_argument("--root-id"); parser.add_argument("--policy-revision"); parser.add_argument("--host-path"); parser.add_argument("--alias"); parser.add_argument("--max-bytes",type=int); parser.add_argument("--authorization-ref")
     args=parser.parse_args(argv)
+    if args.command == "serve" and any(value is None for value in (args.runtime_root, args.expected_runtime_digest, args.expected_config_digest, args.source_commit)):
+        parser.error("serve requires --runtime-root, --expected-runtime-digest, --expected-config-digest, and --source-commit")
     if args.command=="register-root":
         names=("project_id","root_id","policy_revision","host_path","alias","max_bytes","authorization_ref")
         if any(getattr(args,name) is None for name in names): parser.error("register-root requires exact root identity, path, limit, alias, and authorization reference")
@@ -134,15 +139,26 @@ def main(argv:list[str]|None=None)->int:
             print(json.dumps({"ok":False,"error":{"code":_startup_error_code(error)},"redactions_applied":True},sort_keys=True),file=sys.stderr)
             return 2
         return 0
-    with build_runtime(args.config) as runtime:
-        if args.command=="check": return 0
-        import uvicorn
-        from .production_app import create_production_http_app
-        uvicorn.run(create_production_http_app(runtime.service),host=runtime.bind.host,port=runtime.bind.port,log_config=None)
+    if args.command=="check":
+        with build_runtime(args.config): return 0
+    import uvicorn
+    from .production_app import create_production_http_app
+    try:
+        validated_root = validate_production_runtime_root(args.runtime_root)
+        identity, config_bytes = RuntimeIdentity.capture_with_config(
+            validated_root, args.source_commit,
+            args.expected_runtime_digest, args.config, args.expected_config_digest,
+        )
+        with build_runtime(args.config, config_bytes=config_bytes) as runtime:
+            uvicorn.run(create_production_http_app(runtime.service, runtime_identity=identity),host=runtime.bind.host,port=runtime.bind.port,log_config=None)
+    except Exception as error:
+        print(json.dumps({"ok":False,"error":{"code":_startup_error_code(error)},"redactions_applied":True},sort_keys=True),file=sys.stderr)
+        return 2
     return 0
 
 
 def _startup_error_code(error:Exception)->str:
+    if isinstance(error,RuntimeIdentityError): return str(error)
     if isinstance(error,(RegistryFailure,RootVerificationError)): return error.code
     if isinstance(error,PermissionError): return "PRIVATE_STATE_INVALID"
     if isinstance(error,KeyError): return "CONFIG_REFERENCE_MISSING"

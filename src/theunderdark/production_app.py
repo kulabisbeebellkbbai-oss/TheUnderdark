@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from .production import CONTRACT_VERSION, ProductionStorageService
+from .runtime_identity import RuntimeIdentity
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,7 @@ def _strict(mcp: FastMCP) -> None:
         tool.parameters = tool.fn_metadata.arg_model.model_json_schema(by_alias=True)
 
 
-def _health_payload(service: ProductionStorageService) -> dict[str, Any]:
+def _health_payload(service: ProductionStorageService, runtime_identity: RuntimeIdentity) -> dict[str, Any]:
     dependencies = {
         "operation_journal": getattr(service, "journal", None),
         "authorization_verifier": getattr(service, "verifier", None),
@@ -46,18 +47,26 @@ def _health_payload(service: ProductionStorageService) -> dict[str, Any]:
         "snapshot_paginator": getattr(service, "paginator", None),
     }
     ready = all(value is not None for value in dependencies.values())
-    return {
+    payload: dict[str, Any] = {
         "status": "healthy" if ready else "not_ready",
         "contract_version": CONTRACT_VERSION,
         "dependencies": {name: "ready" if value is not None else "not_ready" for name, value in dependencies.items()},
     }
+    payload["runtime"] = {
+        "runtime_digest": runtime_identity.runtime_digest,
+        "config_digest": runtime_identity.config_digest,
+        "process_start_id": runtime_identity.process_start_id,
+    }
+    return payload
 
 
-def create_production_mcp(service: ProductionStorageService) -> FastMCP:
+def create_production_mcp(service: ProductionStorageService, *, runtime_identity: RuntimeIdentity) -> FastMCP:
     """Create the production MCP tool surface without binding or running it."""
 
     if not isinstance(service, ProductionStorageService):
         raise TypeError("an injected ProductionStorageService is required")
+    if not isinstance(runtime_identity, RuntimeIdentity):
+        raise TypeError("a verified RuntimeIdentity is required")
     mcp = FastMCP("TheUnderdark", instructions="Approval-bound production storage execution adapter")
 
     @mcp.tool(name="underdark_project_get")
@@ -82,7 +91,7 @@ def create_production_mcp(service: ProductionStorageService) -> FastMCP:
 
     @mcp.tool(name="underdark_health_get")
     def health_get() -> dict[str, Any]:
-        return {"ok": True, "contract_version": CONTRACT_VERSION, "result": _health_payload(service)}
+        return {"ok": True, "contract_version": CONTRACT_VERSION, "result": _health_payload(service, runtime_identity)}
 
     @mcp.tool(name="underdark_directory_create")
     def directory_create(project_id: str, root_id: str, request_id: str, idempotency_key: str, authorization_ref: str, policy_revision: str, reason: str, relative_path: str, parents: bool = False) -> dict[str, Any]:
@@ -138,14 +147,14 @@ def create_production_mcp(service: ProductionStorageService) -> FastMCP:
     return mcp
 
 
-def create_production_http_app(service: ProductionStorageService):
+def create_production_http_app(service: ProductionStorageService, *, runtime_identity: RuntimeIdentity):
     """Compose GET /health and Streamable HTTP /mcp without opening a listener."""
 
-    mcp = create_production_mcp(service)
+    mcp = create_production_mcp(service, runtime_identity=runtime_identity)
     app = mcp.streamable_http_app()
 
     async def health(_request: Request) -> JSONResponse:
-        return JSONResponse(_health_payload(service))
+        return JSONResponse(_health_payload(service, runtime_identity))
 
     app.routes.insert(0, Route("/health", health, methods=["GET"], name="health"))
     return app

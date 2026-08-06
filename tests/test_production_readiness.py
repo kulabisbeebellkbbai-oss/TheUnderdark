@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from theunderdark.mutation_executor import ExecutorFailure, FsContainMutationExe
 from theunderdark.pagination import CursorInvalid, SQLiteSnapshotPaginator
 from theunderdark.production import ProductionStorageService, _request_digest
 from theunderdark.production_app import create_production_http_app, create_production_mcp
+from theunderdark.runtime_identity import RuntimeIdentity
 
 
 class ExactVerifier:
@@ -41,6 +43,10 @@ class VerifiedExecutor:
     def execute(self, action, request):
         self.calls += 1
         return {"verified": True, "host_state_changed": True, "bytes": 0, "path": "safe:result"}
+
+
+def runtime_identity() -> RuntimeIdentity:
+    return RuntimeIdentity("sha256:" + "a" * 64, "sha256:" + "b" * 64, "sha256:" + "c" * 64)
 
 
 def mutation_request(**changes) -> dict[str, object]:
@@ -155,12 +161,13 @@ def test_snapshot_pagination_is_stable_and_context_bound(tmp_path: Path) -> None
 def test_strict_transport_and_minimal_http_health(tmp_path: Path) -> None:
     journal = SQLiteOperationJournal((tmp_path / "transport.sqlite3").resolve())
     service = ProductionStorageService(journal=journal, verifier=ExactVerifier(), executor=VerifiedExecutor())
-    mcp = create_production_mcp(service)
+    identity = runtime_identity()
+    mcp = create_production_mcp(service, runtime_identity=identity)
 
     async def exercise():
         async with create_connected_server_and_client_session(mcp) as client:
             invalid = await client.call_tool("underdark_health_get", {"unexpected": True})
-        app = create_production_http_app(service)
+        app = create_production_http_app(service, runtime_identity=identity)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             health = await client.get("/health")
             method = await client.post("/health")
@@ -169,10 +176,41 @@ def test_strict_transport_and_minimal_http_health(tmp_path: Path) -> None:
     invalid, health, method, app = asyncio.run(exercise())
     assert invalid.isError is True
     assert health.status_code == 200 and method.status_code == 405
-    assert set(health.json()) == {"status", "contract_version", "dependencies"}
+    assert set(health.json()) == {"status", "contract_version", "dependencies", "runtime"}
+    assert health.json()["runtime"] == {
+        "runtime_digest": identity.runtime_digest,
+        "config_digest": identity.config_digest,
+        "process_start_id": identity.process_start_id,
+    }
     assert "transport.sqlite3" not in health.text
     assert any(getattr(route, "path", None) == "/mcp" for route in app.routes)
     journal.close()
+
+
+def test_startup_identity_mismatch_is_redacted_and_cleans_up_before_readiness_advances(tmp_path, monkeypatch, capsys) -> None:
+    import theunderdark.production_cli as launcher
+
+    monkeypatch.setattr(
+        launcher, "validate_production_runtime_root", lambda runtime_root: runtime_root
+    )
+    monkeypatch.setattr(
+        launcher.RuntimeIdentity,
+        "capture_with_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(launcher.RuntimeIdentityError("RUNTIME_IDENTITY_MISMATCH")),
+    )
+    result = launcher.main([
+        "serve", "--config", str(tmp_path / "config.json"), "--runtime-root", str(tmp_path),
+        "--expected-runtime-digest", "sha256:" + "a" * 64,
+        "--expected-config-digest", "sha256:" + "b" * 64, "--source-commit", "a" * 40,
+    ])
+    output = capsys.readouterr()
+    assert result == 2
+    assert json.loads(output.err) == {
+        "ok": False,
+        "error": {"code": "RUNTIME_IDENTITY_MISMATCH"},
+        "redactions_applied": True,
+    }
+    assert str(tmp_path) not in output.err and "Traceback" not in output.err
 
 
 def test_activation_requires_authoritative_verifier_and_registered_root_composition(tmp_path: Path) -> None:

@@ -51,6 +51,12 @@ def injected_service(tmp_path) -> ProductionStorageService:
     )
 
 
+def runtime_identity():
+    from theunderdark.runtime_identity import RuntimeIdentity
+
+    return RuntimeIdentity("sha256:" + "a" * 64, "sha256:" + "b" * 64, "sha256:" + "c" * 64)
+
+
 def test_loopback_config_rejects_exposure_without_binding() -> None:
     assert LoopbackBindConfig().host == "127.0.0.1"
     assert LoopbackBindConfig(port=8788).port == 8788
@@ -62,7 +68,8 @@ def test_loopback_config_rejects_exposure_without_binding() -> None:
 
 def test_http_health_is_minimal_and_mcp_route_is_separate(tmp_path) -> None:
     service = injected_service(tmp_path)
-    app = create_production_http_app(service)
+    identity = runtime_identity()
+    app = create_production_http_app(service, runtime_identity=identity)
 
     async def request_health():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -81,6 +88,11 @@ def test_http_health_is_minimal_and_mcp_route_is_separate(tmp_path) -> None:
             "read_backend": "ready",
             "snapshot_paginator": "ready",
         },
+        "runtime": {
+            "runtime_digest": identity.runtime_digest,
+            "config_digest": identity.config_digest,
+            "process_start_id": identity.process_start_id,
+        },
     }
     assert "operations.sqlite3" not in response.text
     assert any(getattr(route, "path", None) == "/mcp" for route in app.routes)
@@ -89,7 +101,7 @@ def test_http_health_is_minimal_and_mcp_route_is_separate(tmp_path) -> None:
 
 def test_production_mcp_has_strict_bounded_inventory(tmp_path) -> None:
     service = injected_service(tmp_path)
-    mcp = create_production_mcp(service)
+    mcp = create_production_mcp(service, runtime_identity=runtime_identity())
 
     async def exercise():
         tools = await mcp.list_tools()
@@ -109,12 +121,28 @@ def test_production_mcp_has_strict_bounded_inventory(tmp_path) -> None:
     service.journal.close()
 
 
+def test_production_app_accepts_runtime_identity_only_as_safe_health_extension(tmp_path) -> None:
+    service = injected_service(tmp_path)
+    identity = runtime_identity()
+    app = create_production_http_app(service, runtime_identity=identity)
+    assert app is not None
+    service.journal.close()
+
+
+@pytest.mark.parametrize("factory", [create_production_mcp, create_production_http_app])
+def test_production_surface_requires_verified_runtime_identity(tmp_path, factory) -> None:
+    service = injected_service(tmp_path)
+    with pytest.raises(TypeError, match="RuntimeIdentity"):
+        factory(service, runtime_identity=None)
+    service.journal.close()
+
+
 def test_production_backup_tool_schemas_match_contract_and_production_constants(tmp_path) -> None:
     service = injected_service(tmp_path)
     contract = load_provisioning_contract(BACKUP_CONTRACT_FIXTURE)
 
     async def list_tools():
-        return {tool.name: tool for tool in await create_production_mcp(service).list_tools()}
+        return {tool.name: tool for tool in await create_production_mcp(service, runtime_identity=runtime_identity()).list_tools()}
 
     tools = asyncio.run(list_tools())
     for tool_name, action in (
@@ -168,7 +196,7 @@ def test_production_backup_handlers_forward_only_declared_contract_fields(tmp_pa
     }
 
     async def invoke() -> None:
-        async with create_connected_server_and_client_session(create_production_mcp(service)) as client:
+        async with create_connected_server_and_client_session(create_production_mcp(service, runtime_identity=runtime_identity())) as client:
             await client.call_tool("underdark_backup_create", create)
             await client.call_tool("underdark_backup_verify_restore", verify_restore)
 

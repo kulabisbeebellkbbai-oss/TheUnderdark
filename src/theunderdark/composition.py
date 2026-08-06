@@ -15,6 +15,7 @@ from .production import AuthorizationVerifier, BackupExecutor, ProductionStorage
 from .production_app import create_production_http_app, create_production_mcp
 from .read_backend import FsContainReadBackend
 from .root_registry import SQLiteRootRegistry
+from .runtime_identity import RuntimeIdentity
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ def compose_production_runtime(
     max_concurrent_per_project: int = 4,
     backup_executor_provider: Callable[[str, str, str], BackupExecutor] | None = None,
     backup_bindings: Sequence[BackupBinding] = (),
+    runtime_identity: RuntimeIdentity,
 ) -> ProductionComposition:
     """Join already-created protected dependencies without opening a listener."""
     if any(value is None for value in (registry, journal, admission, paginator, verifier, limits_provider)):
@@ -83,7 +85,13 @@ def compose_production_runtime(
         paginator=paginator,
         backup_executor_provider=provider,
     )
-    return ProductionComposition(service, create_production_mcp(service), create_production_http_app(service))
+    if not isinstance(runtime_identity, RuntimeIdentity):
+        raise TypeError("a verified RuntimeIdentity is required")
+    return ProductionComposition(
+        service,
+        create_production_mcp(service, runtime_identity=runtime_identity),
+        create_production_http_app(service, runtime_identity=runtime_identity),
+    )
 
 
 __all__ = ["BackupBinding", "ProductionComposition", "build_backup_executor_provider", "compose_production_runtime"]

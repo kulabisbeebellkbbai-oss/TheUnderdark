@@ -5,6 +5,10 @@ from theunderdark.composition import compose_production_runtime
 from theunderdark.journal import AuthorizationSnapshot, SQLiteOperationJournal
 from theunderdark.pagination import SQLiteSnapshotPaginator
 from theunderdark.root_registry import ControlPlaneApproval, SQLiteRootRegistry
+from theunderdark.runtime_identity import RuntimeIdentity
+
+
+IDENTITY = RuntimeIdentity("sha256:" + "a" * 64, "sha256:" + "b" * 64, "sha256:" + "c" * 64)
 
 
 class RegistrationApprover:
@@ -38,9 +42,10 @@ def test_explicit_composition_executes_only_registered_exact_revision(tmp_path):
         registry.register(project_id="roadex", root_id="work", policy_revision="1", host_path=root, alias="workspace", max_bytes=32)
         runtime = compose_production_runtime(
             registry=registry, journal=journal, admission=admission, paginator=paginator,
-            verifier=OperationVerifier(), limits_provider=lambda _project: AdmissionLimits(32, 1, 10, 60),
-            max_content_bytes=32, max_concurrent_per_project=1,
-        )
+                verifier=OperationVerifier(), limits_provider=lambda _project: AdmissionLimits(32, 1, 10, 60),
+                max_content_bytes=32, max_concurrent_per_project=1,
+                runtime_identity=IDENTITY,
+            )
         result = runtime.service.directory_create(
             project_id="roadex", root_id="work", request_id="request-1",
             idempotency_key="idempotency-1", authorization_ref="authorization-1",

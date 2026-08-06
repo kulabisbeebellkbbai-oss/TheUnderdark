@@ -37,6 +37,133 @@ def test_check_rejects_empty_token_before_live_call(tmp_path):
     from theunderdark.production_cli import build_runtime
     with pytest.raises(ValueError,match="token file is empty"): build_runtime(cfg)
 
+
+def test_serve_requires_explicit_runtime_attestation_arguments(tmp_path):
+    from theunderdark.production_cli import main
+
+    cfg, _ = config(tmp_path)
+    with pytest.raises(SystemExit) as error:
+        main(["serve", "--config", str(cfg)])
+    assert error.value.code == 2
+
+
+def test_serve_uses_explicit_deployed_runtime_root_and_attested_config_bytes(tmp_path, monkeypatch):
+    cfg, _ = config(tmp_path)
+    deployed = tmp_path / "installed-runtime"
+    deployed.mkdir()
+    captured = {}
+    import theunderdark.production_cli as launcher
+    from theunderdark.runtime_identity import RuntimeIdentity
+
+    identity = RuntimeIdentity("sha256:" + "a" * 64, "sha256:" + "b" * 64, "sha256:" + "c" * 64)
+
+    def capture(runtime_root, commit, expected_runtime, config_path, expected_config):
+        captured.update(runtime_root=runtime_root, config_path=config_path)
+        return identity, b"captured-config"
+
+    class Runtime:
+        service = object()
+        bind = type("Bind", (), {"host": "127.0.0.1", "port": 8799})()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            captured["closed"] = True
+
+    def build(config_path, *, config_bytes=None):
+        captured["build_config_path"] = config_path
+        captured["config_bytes"] = config_bytes
+        return Runtime()
+
+    monkeypatch.setattr(launcher.RuntimeIdentity, "capture_with_config", capture)
+    monkeypatch.setattr(launcher, "validate_production_runtime_root", lambda runtime_root: deployed)
+    monkeypatch.setattr(launcher, "build_runtime", build)
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: captured.update(served=True))
+    import theunderdark.production_app as production_app
+    monkeypatch.setattr(production_app, "create_production_http_app", lambda *_args, **_kwargs: object())
+    result = launcher.main([
+        "serve", "--config", str(cfg), "--runtime-root", str(deployed),
+        "--expected-runtime-digest", identity.runtime_digest,
+        "--expected-config-digest", identity.config_digest, "--source-commit", "a" * 40,
+    ])
+    assert result == 0
+    assert captured["runtime_root"] == deployed
+    assert captured["config_bytes"] == b"captured-config"
+    assert captured["closed"] and captured["served"]
+
+
+def test_serve_refuses_an_unrelated_valid_digest_before_capture_build_or_uvicorn(tmp_path, monkeypatch, capsys):
+    cfg, _ = config(tmp_path)
+    unrelated = tmp_path / "unrelated-runtime"
+    (unrelated / "src" / "theunderdark").mkdir(parents=True)
+    (unrelated / "src" / "theunderdark" / "__init__.py").write_text("\n")
+    from theunderdark.runtime_identity import compute_runtime_digest
+    import theunderdark.production_cli as launcher
+
+    monkeypatch.setattr(launcher, "validate_production_runtime_root", lambda _root: (_ for _ in ()).throw(
+        launcher.RuntimeIdentityError("RUNTIME_PROVENANCE_MISMATCH")
+    ))
+    calls = []
+    monkeypatch.setattr(launcher.RuntimeIdentity, "capture_with_config", lambda *_args, **_kwargs: calls.append("capture"))
+    monkeypatch.setattr(launcher, "build_runtime", lambda *_args, **_kwargs: calls.append("build"))
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", lambda *_args, **_kwargs: calls.append("uvicorn"))
+    result = launcher.main([
+        "serve", "--config", str(cfg), "--runtime-root", str(unrelated),
+        "--expected-runtime-digest", compute_runtime_digest(unrelated, "a" * 40),
+        "--expected-config-digest", "sha256:" + "b" * 64, "--source-commit", "a" * 40,
+    ])
+    output = capsys.readouterr()
+    assert result == 2 and calls == []
+    assert json.loads(output.err)["error"]["code"] == "RUNTIME_PROVENANCE_MISMATCH"
+
+
+def test_build_runtime_uses_captured_config_snapshot_after_path_mutation(tmp_path):
+    cfg, _ = config(tmp_path)
+    captured = cfg.read_bytes()
+    private(cfg, b"this is no longer the captured JSON")
+    import theunderdark.production_cli as launcher
+
+    with launcher.build_runtime(cfg, compose_backup_bindings=False, config_bytes=captured) as runtime:
+        assert runtime.bind.host == "127.0.0.1"
+
+
+def test_build_runtime_fails_closed_when_config_path_is_replaced(tmp_path):
+    cfg, _ = config(tmp_path)
+    captured = cfg.read_bytes()
+    replacement = tmp_path / "replacement.json"
+    private(replacement, captured)
+    cfg.unlink()
+    cfg.symlink_to(replacement)
+    import theunderdark.production_cli as launcher
+
+    with pytest.raises(PermissionError):
+        launcher.build_runtime(cfg, compose_backup_bindings=False, config_bytes=captured)
+
+
+def test_serve_mismatch_is_redacted_and_does_not_leave_runtime_open(tmp_path, monkeypatch, capsys):
+    cfg, _ = config(tmp_path)
+    import theunderdark.production_cli as launcher
+
+    monkeypatch.setattr(
+        launcher, "validate_production_runtime_root", lambda runtime_root: Path(runtime_root)
+    )
+    monkeypatch.setattr(
+        launcher.RuntimeIdentity, "capture_with_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(launcher.RuntimeIdentityError("CONFIG_IDENTITY_MISMATCH")),
+    )
+    result = launcher.main([
+        "serve", "--config", str(cfg), "--runtime-root", str(tmp_path),
+        "--expected-runtime-digest", "sha256:" + "a" * 64,
+        "--expected-config-digest", "sha256:" + "b" * 64, "--source-commit", "a" * 40,
+    ])
+    output = capsys.readouterr()
+    assert result == 2
+    assert json.loads(output.err) == {"ok": False, "error": {"code": "CONFIG_IDENTITY_MISMATCH"}, "redactions_applied": True}
+    assert str(tmp_path) not in output.err
+
 def test_partial_construction_closes_prior_resources(tmp_path,monkeypatch):
     cfg,_=config(tmp_path); closed=[]
     import theunderdark.production_cli as launcher
