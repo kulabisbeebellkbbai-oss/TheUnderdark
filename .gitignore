@@ -6,6 +6,7 @@ AGENTS.md
 .vscode/
 .playwright-mcp/
 .roadex-client-test/
+.worktrees/
 
 # Secrets and credentials
 .env
